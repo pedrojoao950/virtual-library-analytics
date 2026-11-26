@@ -38,6 +38,14 @@
   .grupo button[aria-pressed="true"] { font-weight:700; box-shadow: inset 0 -2px 0 var(--s1); }
   input[type=date] { font:inherit; font-size:14px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--ink); }
   #personalizado[hidden] { display:none; }
+  select { font:inherit; font-size:14px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--ink); max-width:100%; }
+  .largo { grid-column:1 / -1; }
+  .estado { white-space:nowrap; }
+  .estado::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:1px; background:var(--axis); }
+  .estado.on::before { background:#0aac23; }
+  tr.clicavel { cursor:pointer; }
+  tr.clicavel:hover td, tr.clicavel:focus td { background:var(--wash); }
+  tr.clicavel:focus { outline:none; }
   #personalizado { display:inline-flex; gap:6px; align-items:center; }
   .kpis { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; margin-bottom:20px; }
   .kpi { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
@@ -86,6 +94,7 @@
     <span id="personalizado" hidden>
       <input type="date" id="ini" aria-label="Início"> – <input type="date" id="fim" aria-label="Fim">
     </span>
+    <select id="posto" aria-label="Computador"><option value="">Todos os computadores</option></select>
     <div class="grupo" id="agrupamentos" aria-label="Agrupar por">
       <button data-a="dia">Diário</button><button data-a="semana">Semanal</button><button data-a="mes">Mensal</button>
     </div>
@@ -96,6 +105,9 @@
     <section class="kpis" id="kpis" aria-label="Indicadores"></section>
 
     <div class="grelha">
+      <section class="cartao largo"><div class="cab"><h2>Computadores</h2><a data-csv="computadores" href="#">Exportar CSV</a></div>
+        <p class="sub">Estado agora (ativo = deu sinal nos últimos 3 min) e utilização no período. Clique numa linha para ver só esse computador.</p>
+        <div class="tabela-wrap" id="t-computadores"></div></section>
       <section class="cartao">
         <h2>Tempo de leitura</h2><p class="sub">Minutos de leitura ativa por período</p>
         <div class="grafico" id="g-leitura"></div>
@@ -135,7 +147,7 @@
 "use strict";
 const qs = new URLSearchParams(location.search);
 const token = qs.get("token");
-const estado = { periodo: qs.get("periodo") || "30d", agrupar: qs.get("agrupar") || "dia", inicio: qs.get("inicio") || "", fim: qs.get("fim") || "" };
+const estado = { posto: qs.get("posto") || "", periodo: qs.get("periodo") || "30d", agrupar: qs.get("agrupar") || "dia", inicio: qs.get("inicio") || "", fim: qs.get("fim") || "" };
 let dados = null;
 
 const $ = (id) => document.getElementById(id);
@@ -279,7 +291,7 @@ function linha(alvo, linhas, chave, nome, { formato = (v) => fmt(v, 1) + " s", a
 }
 
 // ------------------------------------------------------------------ tabelas
-function tabela(alvo, linhas, colunasDef, { barra } = {}) {
+function tabela(alvo, linhas, colunasDef, { barra, aoClicar } = {}) {
   alvo.replaceChildren();
   if (!linhas.length) { const p = document.createElement("p"); p.className = "vazio"; p.textContent = "Sem dados neste período."; alvo.append(p); return; }
   const t = document.createElement("table"), th = t.createTHead().insertRow(), tb = t.createTBody();
@@ -287,10 +299,16 @@ function tabela(alvo, linhas, colunasDef, { barra } = {}) {
   const max = barra ? Math.max(...linhas.map((r) => r[barra] || 0)) || 1 : 1;
   for (const r of linhas) {
     const tr = tb.insertRow();
+    if (aoClicar) {
+      tr.className = "clicavel"; tr.tabIndex = 0;
+      tr.addEventListener("click", () => aoClicar(r));
+      tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); aoClicar(r); } });
+    }
     colunasDef.forEach((c, ci) => {
       const td = tr.insertCell();
       td.textContent = c.f ? c.f(r[c.chave], r) : (r[c.chave] ?? "—");
       if (c.num) td.className = "n";
+      if (c.classe) td.classList.add(...c.classe(r).split(" ").filter(Boolean));
       if (barra && ci === 0) { const b = document.createElement("div"); b.className = "barra"; b.style.width = (100 * (r[barra] || 0) / max) + "%"; td.append(b); }
     });
   }
@@ -298,8 +316,13 @@ function tabela(alvo, linhas, colunasDef, { barra } = {}) {
 }
 
 // ------------------------------------------------------------------ KPIs
+const SEM_POSTO = "__sem_posto__";
+const nomePosto = (p) => p === null || p === SEM_POSTO ? "Não identificado (fora da biblioteca)" : p;
 function kpis(r) {
+  const pcs = (dados.computadores || []).filter((c) => c.posto !== null);
+  const ativos = pcs.filter((c) => c.ativo_agora).length;
   const itens = [
+    ["Computadores ativos agora", pcs.length ? `${ativos} de ${pcs.length}` : "—", pcs.length ? `${fmt(pcs.reduce((s, c) => s + (c.horas_uso || 0), 0), 1)} h de uso no período` : "nenhum computador identificado"],
     ["Sessões", fmt(r.sessoes), `${fmt(r.utilizadores)} utilizadores únicos`],
     ["Pesquisas", fmt(r.pesquisas), `${fmt(r.pesquisas_por_sessao, 1)} por sessão com pesquisa`],
     ["Taxa de sucesso da pesquisa", r.taxa_sucesso_pesquisa === null ? "—" : fmt(r.taxa_sucesso_pesquisa, 1) + "%", "pesquisas que levaram a abrir um livro"],
@@ -324,12 +347,30 @@ const SERIES_PESQ = [
   { chave: "sem_clique", nome: "Não abriu nenhum", varCor: "--s2" },
   { chave: "sem_resultados", nome: "Sem resultados", varCor: "--s3" },
 ];
+function semAtividade(m) {
+  if (m === null || m === undefined) return "—";
+  if (m < 1) return "agora mesmo";
+  if (m < 60) return `há ${m} min`;
+  if (m < 48 * 60) return `há ${Math.floor(m / 60)} h`;
+  return `há ${Math.floor(m / 1440)} dias`;
+}
 function desenhar() {
   if (!dados) return;
+  tabela($("t-computadores"), dados.computadores, [
+    { nome: "Estado", chave: "ativo_agora", f: (v, r) => r.posto === null ? "—" : v ? "Ativo" : "Inativo", classe: (r) => r.posto === null ? "" : "estado" + (r.ativo_agora ? " on" : "") },
+    { nome: "Computador", chave: "posto", f: (v) => nomePosto(v) },
+    { nome: "Última atividade", chave: "minutos_sem_atividade", f: (v) => semAtividade(v) },
+    { nome: "Horas de uso", chave: "horas_uso", num: 1, f: (v, r) => r.posto === null ? "—" : fmt(v, 1) },
+    { nome: "Sessões", chave: "sessoes", num: 1 },
+    { nome: "Pesquisas", chave: "pesquisas", num: 1 },
+    { nome: "Sucesso", chave: "taxa_sucesso", num: 1, f: (v) => v === null ? "—" : fmt(v, 1) + "%" },
+    { nome: "Não encontrados", chave: "nao_encontrados", num: 1 },
+    { nome: "Min. leitura", chave: "minutos_leitura", num: 1, f: (v) => fmt(v, 1) },
+  ], { aoClicar: (r) => { estado.posto = r.posto === null ? SEM_POSTO : r.posto; carregar(); } });
   const s = dados.serie, rp = (k, c) => rotuloPeriodo(k, c);
   const iv = dados.intervalo;
   $("intervalo").textContent = `${rotuloPeriodo(iv.inicio)} – ${rotuloPeriodo(iv.fim)} · agrupado por ${{ dia: "dia", semana: "semana", mes: "mês" }[iv.agrupar]} · fuso UTC${iv.fuso_horas >= 0 ? "+" : ""}${iv.fuso_horas}`
-    .replace("Semana de ", "");
+    .replace("Semana de ", "") + (iv.posto ? ` · ${nomePosto(iv.posto)}` : "");
   kpis(dados.resumo);
   colunas($("g-leitura"), s, [{ chave: "minutos_leitura", nome: "Minutos de leitura", varCor: "--s1" }], { rotulo: rp, formato: (v) => fmt(v, 1) + " min" });
   colunas($("g-pesquisas"), s, SERIES_PESQ, { rotulo: rp, formato: (v) => fmt(v) });
@@ -356,12 +397,24 @@ function parametros(extra = {}) {
   if (estado.periodo === "custom") { if (estado.inicio) p.set("inicio", estado.inicio); if (estado.fim) p.set("fim", estado.fim); }
   else p.set("periodo", estado.periodo);
   p.set("agrupar", estado.agrupar);
+  if (estado.posto) p.set("posto", estado.posto);
   if (token) p.set("token", token);
   for (const k in extra) p.set(k, extra[k]);
   return p;
 }
 
+async function carregarPostos() {
+  try {
+    const p = new URLSearchParams(); if (token) p.set("token", token);
+    const j = await (await fetch("/api/postos?" + p)).json();
+    const sel = $("posto");
+    const nomes = [...new Set([...(j.postos || []), ...(estado.posto && estado.posto !== SEM_POSTO ? [estado.posto] : [])])].sort();
+    sel.replaceChildren(new Option("Todos os computadores", ""), ...nomes.map((n) => new Option(n, n)), new Option(nomePosto(null), SEM_POSTO));
+    sel.value = estado.posto;
+  } catch (e) { /* o filtro fica só com "Todos" */ }
+}
 async function carregar() {
+  if ($("posto").value !== estado.posto) $("posto").value = estado.posto;
   for (const b of document.querySelectorAll("#periodos button")) b.setAttribute("aria-pressed", b.dataset.p === estado.periodo);
   for (const b of document.querySelectorAll("#agrupamentos button")) b.setAttribute("aria-pressed", b.dataset.a === estado.agrupar);
   $("personalizado").hidden = estado.periodo !== "custom";
@@ -383,6 +436,7 @@ async function carregar() {
 }
 
 $("periodos").addEventListener("click", (e) => { const p = e.target.dataset && e.target.dataset.p; if (p) { estado.periodo = p; carregar(); } });
+$("posto").addEventListener("change", (e) => { estado.posto = e.target.value; carregar(); });
 $("agrupamentos").addEventListener("click", (e) => { const a = e.target.dataset && e.target.dataset.a; if (a) { estado.agrupar = a; carregar(); } });
 for (const id of ["ini", "fim"]) $(id).addEventListener("change", () => { estado.inicio = $("ini").value; estado.fim = $("fim").value; carregar(); });
 $("ini").value = estado.inicio; $("fim").value = estado.fim;
@@ -395,8 +449,9 @@ document.addEventListener("click", (e) => {
 });
 let tempo; addEventListener("resize", () => { clearTimeout(tempo); tempo = setTimeout(desenhar, 150); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", desenhar);
-carregar();
-setInterval(() => { if (document.visibilityState === "visible" && estado.periodo === "hoje") carregar(); }, 60000);
+carregarPostos().then(carregar);
+// atualiza o estado dos computadores e os números a cada minuto
+setInterval(() => { if (document.visibilityState === "visible") { carregarPostos(); carregar(); } }, 60000);
 </script>
 </body>
 </html>

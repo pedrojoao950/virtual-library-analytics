@@ -54,6 +54,7 @@ def main():
     ap.add_argument("--fim", help="AAAA-MM-DD")
     ap.add_argument("--agrupar", default="dia", choices=analytics.AGRUPAMENTOS)
     ap.add_argument("--limite", type=int, default=10)
+    ap.add_argument("--posto", help="só este computador (use __sem_posto__ para acessos não identificados)")
     ap.add_argument("--bd", default=None)
     ap.add_argument("--fuso", type=float, default=float(os.environ.get("BIBLIO_FUSO", "1")))
     ap.add_argument("--json", action="store_true", help="imprime tudo em JSON")
@@ -61,7 +62,7 @@ def main():
     a = ap.parse_args()
 
     conn = analytics.ligar(a.bd)
-    d = analytics.metricas(conn, a.periodo, a.inicio, a.fim, a.agrupar, a.fuso, a.limite)
+    d = analytics.metricas(conn, a.periodo, a.inicio, a.fim, a.agrupar, a.fuso, a.limite, posto=a.posto)
 
     if a.csv:
         pasta = Path(a.csv)
@@ -76,11 +77,17 @@ def main():
         return
 
     iv = d["intervalo"]
-    print(f"Biblioteca Virtual — {iv['inicio']} a {iv['fim']} (agrupado por {iv['agrupar']})")
+    print(f"Biblioteca Virtual — {iv['inicio']} a {iv['fim']} (agrupado por {iv['agrupar']})"
+          + (f" — computador {iv['posto']}" if iv["posto"] else ""))
     print("\nResumo")
     print("------")
     for k, v in d["resumo"].items():
         print(f"  {ROTULOS.get(k, k):<48} {'—' if v is None else v}")
+    pcs = [dict(c, posto=c["posto"] or "(não identificado)", estado="ativo" if c["ativo_agora"] else "")
+           for c in d["computadores"]]
+    _tabela("Computadores", pcs, [("posto", "Computador"), ("estado", "Agora"), ("ultima_atividade", "Última atividade"),
+                                  ("horas_uso", "Horas uso"), ("sessoes", "Sessões"), ("pesquisas", "Pesquisas"),
+                                  ("minutos_leitura", "Min. leitura")])
     _tabela("Livros mais lidos", d["mais_lidos"],
             [("titulo", "Livro"), ("minutos", "Minutos"), ("leitores", "Leitores")])
     _tabela("Livros mais procurados", d["mais_procurados_livros"],

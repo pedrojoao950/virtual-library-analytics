@@ -17,6 +17,13 @@
  * Sem configuração extra também pode usar atributos HTML:
  *   <input data-ba-pesquisa>  → mede automaticamente o tempo a escrever a pesquisa
  *
+ * Computadores da biblioteca: para identificar cada computador, abra uma vez nesse
+ * computador qualquer página da biblioteca com ?ba_posto=NOME (ex.: ?ba_posto=PC-01).
+ * O nome fica guardado no navegador. Alternativas: data-posto="PC-01" na tag <script>,
+ * BibliotecaAnalytics.definirPosto("PC-01"), ou o ficheiro postos.json no servidor (por IP).
+ * Cada computador envia um sinal de presença por minuto, para o painel saber quais
+ * estão ativos e quanto tempo foram usados.
+ *
  * Privacidade: não recolhe IP, nome, e-mail nem cookies; usa um identificador
  * anónimo aleatório guardado no navegador.
  */
@@ -32,6 +39,8 @@
   var LEITURA_TICK_MS = 15 * 1000;       // amostragem do tempo de leitura
   var LEITURA_INATIVO_MS = 2 * 60 * 1000; // sem interação há 2 min = não está a ler
   var LEITURA_ENVIO_MS = 60 * 1000;
+  var PRESENCA_MS = 60 * 1000;
+  var USO_INATIVO_MS = 5 * 60 * 1000;    // sem interação há 5 min = computador parado
 
   function uid() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -43,10 +52,23 @@
   var utilizador = ler("localStorage", "ba_utilizador") || uid();
   guardar("localStorage", "ba_utilizador", utilizador);
 
-  function sessao() {
+  // ---------------------------------------------------------- computador (posto)
+  var posto = null;
+  try {
+    var doUrl = new URLSearchParams(location.search).get("ba_posto");
+    if (doUrl !== null) {
+      doUrl = doUrl.trim().slice(0, 80);
+      if (doUrl) guardar("localStorage", "ba_posto", doUrl);
+      else { try { localStorage.removeItem("ba_posto"); } catch (e) { /* ignora */ } }
+    }
+  } catch (e) { /* navegador antigo */ }
+  posto = (script && script.getAttribute("data-posto")) || window.BA_POSTO || ler("localStorage", "ba_posto") || null;
+
+  function sessao(soLer) {
     var agora = Date.now();
     var id = ler("localStorage", "ba_sessao");
     var ultimo = +ler("localStorage", "ba_sessao_ultimo") || 0;
+    if (soLer && id) return id; // sinais de presença não prolongam a sessão
     if (!id || agora - ultimo > SESSAO_INATIVA_MS) id = uid();
     guardar("localStorage", "ba_sessao", id);
     guardar("localStorage", "ba_sessao_ultimo", String(agora));
@@ -56,7 +78,8 @@
   // ------------------------------------------------------------ fila de envio
   var fila = [];
   function registar(tipo, dados) {
-    var ev = { tipo: tipo, ts: Date.now(), sessao: sessao(), utilizador: utilizador, pagina: location.pathname };
+    var ev = { tipo: tipo, ts: Date.now(), sessao: sessao(tipo === "presenca"), utilizador: utilizador, pagina: location.pathname };
+    if (posto) ev.posto = posto;
     for (var k in dados) if (dados[k] !== undefined && dados[k] !== null) ev[k] = dados[k];
     fila.push(ev);
     if (fila.length > 300) fila.shift();
@@ -156,6 +179,17 @@
   });
   window.addEventListener("pagehide", function () { tick(); descarregarLeitura(); enviar(true); });
 
+  // ---------------------------------------------------------------- presença
+  var ultimoSinal = Date.now();
+  function presenca() {
+    var agora = Date.now();
+    var emUso = document.visibilityState === "visible" && agora - ultimaInteracao < USO_INATIVO_MS;
+    registar("presenca", { duracao_ms: emUso ? Math.min(agora - ultimoSinal, PRESENCA_MS * 2) : 0 });
+    ultimoSinal = agora;
+    enviar();
+  }
+  setInterval(presenca, PRESENCA_MS);
+
   // ------------------------------------------------------------------ resto
   window.BibliotecaAnalytics = {
     inicioPesquisa: inicioPesquisa,
@@ -165,8 +199,15 @@
     iniciarLeitura: iniciarLeitura,
     terminarLeitura: terminarLeitura,
     naoEncontrado: function (termoOuTitulo) { registar("nao_encontrado", { termo: String(termoOuTitulo || "") }); enviar(); },
-    enviarAgora: function () { enviar(); }
+    enviarAgora: function () { enviar(); },
+    definirPosto: function (nome) {
+      posto = String(nome || "").trim().slice(0, 80) || null;
+      if (posto) guardar("localStorage", "ba_posto", posto);
+      else { try { localStorage.removeItem("ba_posto"); } catch (e) { /* ignora */ } }
+    },
+    posto: function () { return posto; }
   };
 
   registar("vista_pagina", {});
+  registar("presenca", { duracao_ms: 0 });
 })();

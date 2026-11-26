@@ -20,7 +20,12 @@ TIPOS_EVENTO = {
     "vista_livro",       # abertura da ficha de um livro
     "leitura",           # bloco de tempo de leitura ativa: livro, duracao_ms
     "nao_encontrado",    # livro pedido/inexistente (pedido explícito ou link partido)
+    "presenca",          # sinal periódico do computador: duracao_ms = tempo de uso ativo desde o último sinal
 }
+
+SEM_POSTO = "__sem_posto__"            # valor do filtro para acessos sem computador identificado
+ONLINE_MS = 3 * 60 * 1000              # computador "ativo agora" se deu sinal nos últimos 3 min
+MAX_PRESENCA_MS = 5 * 60 * 1000
 
 MAX_TEXTO = 300
 MAX_LEITURA_BLOCO_MS = 5 * 60 * 1000       # um bloco de leitura nunca vale mais de 5 min
@@ -46,12 +51,14 @@ CREATE TABLE IF NOT EXISTS eventos (
     livro_id       TEXT,
     livro_titulo   TEXT,
     posicao        INTEGER,
-    duracao_ms     INTEGER
+    duracao_ms     INTEGER,
+    posto          TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_eventos_tipo_ts ON eventos (tipo, ts);
 CREATE INDEX IF NOT EXISTS idx_eventos_ts ON eventos (ts);
 CREATE INDEX IF NOT EXISTS idx_eventos_pesquisa ON eventos (pesquisa_id);
 """
+INDICES_POSTO = "CREATE INDEX IF NOT EXISTS idx_eventos_posto_ts ON eventos (posto, ts);"
 
 
 # --------------------------------------------------------------------------- BD
@@ -63,6 +70,11 @@ def ligar(caminho: str | None = None) -> sqlite3.Connection:
     if caminho != ":memory:":
         conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(ESQUEMA)
+    # migração de bases criadas pela versão anterior (sem a coluna posto)
+    if "posto" not in {r[1] for r in conn.execute("PRAGMA table_info(eventos)")}:
+        conn.execute("ALTER TABLE eventos ADD COLUMN posto TEXT")
+    conn.execute(INDICES_POSTO)
+    conn.commit()
     return conn
 
 
@@ -126,8 +138,9 @@ def validar_evento(bruto: dict, agora_ms: int | None = None) -> dict | None:
         "livro_titulo": _texto(bruto.get("livro_titulo")),
         "posicao": _inteiro(bruto.get("posicao"), 1, 10_000),
         "duracao_ms": None,
+        "posto": _texto(bruto.get("posto"), 80),
     }
-    teto = MAX_LEITURA_BLOCO_MS if tipo == "leitura" else MAX_DURACAO_PESQUISA_MS
+    teto = {"leitura": MAX_LEITURA_BLOCO_MS, "presenca": MAX_PRESENCA_MS}.get(tipo, MAX_DURACAO_PESQUISA_MS)
     ev["duracao_ms"] = _inteiro(bruto.get("duracao_ms"), 0, teto)
 
     if tipo == "pesquisa" and (not termo or ev["num_resultados"] is None):
@@ -143,12 +156,17 @@ def validar_evento(bruto: dict, agora_ms: int | None = None) -> dict | None:
 
 COLUNAS = ("ts", "recebido", "tipo", "sessao", "utilizador", "pagina", "termo",
            "termo_norm", "num_resultados", "pesquisa_id", "livro_id",
-           "livro_titulo", "posicao", "duracao_ms")
+           "livro_titulo", "posicao", "duracao_ms", "posto")
 
 
-def inserir_eventos(conn: sqlite3.Connection, brutos, agora_ms: int | None = None) -> int:
-    """Valida e grava uma lista de eventos. Devolve quantos foram aceites."""
+def inserir_eventos(conn: sqlite3.Connection, brutos, agora_ms: int | None = None,
+                    posto_omissao: str | None = None) -> int:
+    """Valida e grava uma lista de eventos. Devolve quantos foram aceites.
+    `posto_omissao` identifica o computador quando o evento não traz um (p. ex. pelo IP)."""
     validos = [e for e in (validar_evento(b, agora_ms) for b in brutos) if e]
+    if posto_omissao:
+        for e in validos:
+            e["posto"] = e["posto"] or posto_omissao
     if validos:
         conn.executemany(
             f"INSERT INTO eventos ({', '.join(COLUNAS)}) "
@@ -230,14 +248,21 @@ def _taxa(parte, total):
 
 def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None = None,
              fim: str | None = None, agrupar: str = "dia", fuso_horas: float = 1.0,
-             limite: int = 10, hoje: date | None = None) -> dict:
+             limite: int = 10, hoje: date | None = None, posto: str | None = None,
+             agora_ms: int | None = None) -> dict:
     if agrupar not in AGRUPAMENTOS:
         raise ValueError(f"agrupamento desconhecido: {agrupar}")
     d_ini, d_fim = intervalo_periodo(periodo, inicio, fim, fuso_horas, hoje)
     a, b = _limites_ms(d_ini, d_fim, fuso_horas)
     mod = f"{fuso_horas:+g} hours"
     janela = "ts >= :a AND ts < :b"
-    p = {"a": a, "b": b, "lim": limite}
+    if posto == SEM_POSTO:
+        janela += " AND posto IS NULL"
+    elif posto:
+        janela += " AND posto = :posto"
+    p = {"a": a, "b": b, "lim": limite, "posto": posto}
+    # as métricas de navegação ignoram os sinais de presença dos computadores
+    nav = f"{janela} AND tipo != 'presenca'"
 
     def um(sql, **extra):
         return conn.execute(sql, {**p, **extra}).fetchone()
@@ -256,7 +281,7 @@ def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None 
         p AS (
             SELECT e.*, c.pesquisa_id IS NOT NULL AS sucesso, c.ate_clique, c.posicao AS pos_clique
             FROM eventos e LEFT JOIN cliques c ON c.pesquisa_id = e.pesquisa_id
-            WHERE e.tipo = 'pesquisa' AND e.{janela}
+            WHERE e.tipo = 'pesquisa' AND e.{janela.replace(" AND ", " AND e.")}
         )
     """
 
@@ -264,7 +289,7 @@ def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None 
                           COUNT(DISTINCT COALESCE(utilizador, sessao)) AS utilizadores,
                           SUM(tipo = 'vista_pagina') AS vistas_pagina,
                           SUM(tipo = 'vista_livro') AS vistas_livro
-                   FROM eventos WHERE {janela}""")
+                   FROM eventos WHERE {nav}""")
     pq = um(pesquisas_cte + """
         SELECT COUNT(*) AS total,
                SUM(num_resultados = 0) AS sem_resultados,
@@ -282,7 +307,7 @@ def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None 
                 FROM eventos WHERE tipo = 'leitura' AND {janela}""")
     duracao_sessao = um(f"""SELECT AVG(fim - ini) AS ms FROM (
                               SELECT MIN(ts) AS ini, MAX(ts) AS fim FROM eventos
-                              WHERE {janela} GROUP BY sessao HAVING COUNT(*) > 1)""")
+                              WHERE {nav} GROUP BY sessao HAVING COUNT(*) > 1)""")
     nao_enc_explicitos = um(f"""SELECT COUNT(*) AS n FROM eventos
                                 WHERE tipo = 'nao_encontrado' AND {janela}""")["n"]
 
@@ -352,7 +377,7 @@ def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None 
                  "sem_resultados": 0, "tempo_medio_pesquisa_s": None, "minutos_leitura": 0.0,
                  "leitores": 0} for k in _baldes(d_ini, d_fim, agrupar)}
     for r in todos(f"SELECT {balde.replace('?', ':mod')} AS k, COUNT(DISTINCT sessao) AS s "
-                   f"FROM eventos WHERE {janela} GROUP BY k", mod=mod):
+                   f"FROM eventos WHERE {nav} GROUP BY k", mod=mod):
         if r["k"] in serie:
             serie[r["k"]]["sessoes"] = r["s"]
     for r in todos(pesquisas_cte + f"""
@@ -379,7 +404,8 @@ def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None 
 
     return {
         "intervalo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat(),
-                      "agrupar": agrupar, "fuso_horas": fuso_horas},
+                      "agrupar": agrupar, "fuso_horas": fuso_horas, "posto": posto},
+        "computadores": computadores(conn, a, b, posto, fuso_horas, agora_ms),
         "resumo": resumo,
         "mais_procurados_termos": termos,
         "mais_procurados_livros": livros_procurados,
@@ -390,7 +416,55 @@ def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None 
     }
 
 
-TABELAS_EXPORTAVEIS = ("mais_procurados_termos", "mais_procurados_livros", "mais_lidos",
+def computadores(conn: sqlite3.Connection, a: int, b: int, posto: str | None = None,
+                 fuso_horas: float = 1.0, agora_ms: int | None = None) -> list[dict]:
+    """Uma linha por computador: estado agora e uso no intervalo [a, b[.
+    Acessos sem computador identificado (p. ex. a partir de casa) aparecem como posto None."""
+    agora_ms = agora_ms if agora_ms is not None else int(time.time() * 1000)
+    filtro = ""
+    if posto == SEM_POSTO:
+        filtro = "AND posto IS NULL"
+    elif posto:
+        filtro = "AND posto = :posto"
+    linhas = [dict(r) for r in conn.execute(f"""
+        WITH cliques AS (SELECT DISTINCT pesquisa_id FROM eventos
+                         WHERE tipo = 'clique_resultado' AND pesquisa_id IS NOT NULL AND ts >= :a)
+        SELECT posto,
+               COUNT(DISTINCT CASE WHEN tipo != 'presenca' THEN sessao END) AS sessoes,
+               COUNT(DISTINCT CASE WHEN tipo != 'presenca' THEN COALESCE(utilizador, sessao) END) AS utilizadores,
+               SUM(tipo = 'pesquisa') AS pesquisas,
+               ROUND(100.0 * SUM(tipo = 'pesquisa' AND pesquisa_id IN (SELECT pesquisa_id FROM cliques))
+                     / NULLIF(SUM(tipo = 'pesquisa'), 0), 1) AS taxa_sucesso,
+               SUM((tipo = 'pesquisa' AND num_resultados = 0) OR tipo = 'nao_encontrado') AS nao_encontrados,
+               ROUND(SUM(CASE WHEN tipo = 'leitura' THEN duracao_ms ELSE 0 END) / 60000.0, 1) AS minutos_leitura,
+               ROUND(SUM(CASE WHEN tipo = 'presenca' THEN duracao_ms ELSE 0 END) / 3600000.0, 1) AS horas_uso
+        FROM eventos WHERE ts >= :a AND ts < :b {filtro}
+        GROUP BY posto""", {"a": a, "b": b, "posto": posto})]
+    ultimos = {r["posto"]: r["u"] for r in conn.execute(
+        f"SELECT posto, MAX(ts) AS u FROM eventos WHERE ts <= :agora {filtro} GROUP BY posto",
+        {"agora": agora_ms + TOLERANCIA_FUTURO_MS, "posto": posto})}
+    vistos = {r["posto"] for r in linhas}
+    # computadores conhecidos mas sem uso no período também aparecem (com zeros)
+    for nome in ultimos:
+        if nome not in vistos:
+            linhas.append({"posto": nome, "sessoes": 0, "utilizadores": 0, "pesquisas": 0, "taxa_sucesso": None,
+                           "nao_encontrados": 0, "minutos_leitura": 0.0, "horas_uso": 0.0})
+    tz = _fuso(fuso_horas)
+    for r in linhas:
+        u = ultimos.get(r["posto"])
+        r["ultima_atividade"] = datetime.fromtimestamp(u / 1000, tz).strftime("%Y-%m-%d %H:%M") if u else None
+        r["minutos_sem_atividade"] = None if u is None else max(0, (agora_ms - u) // 60000)
+        r["ativo_agora"] = r["posto"] is not None and u is not None and agora_ms - u <= ONLINE_MS
+    linhas.sort(key=lambda r: (r["posto"] is None, r["posto"] or ""))
+    return linhas
+
+
+def lista_postos(conn: sqlite3.Connection) -> list[str]:
+    return [r[0] for r in conn.execute(
+        "SELECT DISTINCT posto FROM eventos WHERE posto IS NOT NULL ORDER BY posto")]
+
+
+TABELAS_EXPORTAVEIS = ("computadores", "mais_procurados_termos", "mais_procurados_livros", "mais_lidos",
                        "nao_encontrados", "serie", "por_hora", "resumo")
 
 

@@ -32,6 +32,8 @@ TERMOS_LIVRO = {
 }
 NAO_EXISTEM = ["harry potter", "contabilidade geral", "anatomia humana netter", "economia angolana",
                "química orgânica", "o alquimista", "programação python", "metodologia científica"]
+POSTOS = [f"PC-{i:02d}" for i in range(1, 9)]  # computadores da sala de leitura
+PESO_POSTOS = [6, 6, 5, 5, 4, 3, 2, 1]
 HORAS = [0, 0, 0, 0, 0, 0, 1, 2, 4, 6, 7, 6, 4, 5, 7, 7, 6, 5, 5, 6, 6, 4, 2, 1]
 
 
@@ -50,7 +52,11 @@ def gerar(conn, dias: int, sessoes_dia: int, semente: int = 7) -> int:
             if t > agora:
                 continue
             s, u = uuid.uuid4().hex, rnd.choice(utilizadores)
-            ev = lambda tipo, **k: eventos.append({"tipo": tipo, "ts": t, "sessao": s, "utilizador": u, **k})  # noqa: E731
+            # ~70 % dos acessos vêm dos computadores da biblioteca; o resto de casa (sem posto)
+            posto = rnd.choices(POSTOS, PESO_POSTOS)[0] if rnd.random() < 0.7 else None
+            t0 = t
+            ev = lambda tipo, **k: eventos.append({"tipo": tipo, "ts": t, "sessao": s, "utilizador": u,  # noqa: E731
+                                                   "posto": posto, **k})
             ev("vista_pagina", pagina="/")
             for _ in range(rnd.choices([1, 2, 3], [6, 3, 1])[0]):
                 escrita = rnd.randint(2000, 15000)
@@ -83,6 +89,16 @@ def gerar(conn, dias: int, sessoes_dia: int, semente: int = 7) -> int:
                         ev("leitura", livro_id=lid, livro_titulo=titulo, duracao_ms=bloco)
                         restante -= bloco
                     break
+            if posto:  # sinal de presença a cada minuto enquanto o computador é usado
+                for tp in range(t0, min(t, agora) + 1, 60000):
+                    eventos.append({"tipo": "presenca", "ts": tp, "sessao": s, "utilizador": u,
+                                    "posto": posto, "duracao_ms": 0 if tp == t0 else 60000})
+    # alguns computadores em uso neste momento
+    for posto in POSTOS[:5]:
+        s = uuid.uuid4().hex
+        for m in range(rnd.randint(3, 20), -1, -1):
+            eventos.append({"tipo": "presenca", "ts": agora - m * 60000 - rnd.randint(0, 20000), "sessao": s,
+                            "utilizador": None, "posto": posto, "duracao_ms": 60000})
     eventos = [e for e in eventos if e["ts"] <= agora]
     # validar_evento substitui ts muito antigos (> 7 dias) pela hora de receção;
     # aqui validamos cada evento como se tivesse chegado no seu próprio instante.

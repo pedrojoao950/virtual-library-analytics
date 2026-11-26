@@ -9,6 +9,9 @@ Variáveis de ambiente opcionais:
     BIBLIO_TOKEN    se definido, o painel e a API de métricas exigem ?token=...
     BIBLIO_ORIGENS  origens autorizadas a enviar eventos (CORS), separadas por vírgula; '*' por omissão
     BIBLIO_FUSO     fuso horário em horas para agrupar dias/semanas/meses (por omissão 1 = Angola)
+    BIBLIO_POSTOS   ficheiro JSON {"IP": "nome do computador"} para identificar os computadores
+                    da biblioteca pelo endereço IP (por omissão postos.json, se existir)
+    BIBLIO_CONFIAR_PROXY=1  usar o cabeçalho X-Forwarded-For (só atrás de um proxy de confiança)
 """
 
 from __future__ import annotations
@@ -41,6 +44,27 @@ class Config:
     token = os.environ.get("BIBLIO_TOKEN") or None
     origens = [o.strip() for o in os.environ.get("BIBLIO_ORIGENS", "*").split(",") if o.strip()]
     fuso = float(os.environ.get("BIBLIO_FUSO", "1"))
+    ficheiro_postos = os.environ.get("BIBLIO_POSTOS", str(Path(__file__).resolve().parent / "postos.json"))
+    confiar_proxy = os.environ.get("BIBLIO_CONFIAR_PROXY") == "1"
+    _postos_cache: tuple[float, dict] = (-1.0, {})
+
+    @classmethod
+    def postos_por_ip(cls) -> dict:
+        """Lê postos.json (recarrega automaticamente quando o ficheiro muda)."""
+        try:
+            mtime = os.path.getmtime(cls.ficheiro_postos)
+        except OSError:
+            return {}
+        if mtime != cls._postos_cache[0]:
+            try:
+                with open(cls.ficheiro_postos, encoding="utf-8") as f:
+                    dados = json.load(f)
+                mapa = {str(k).strip(): str(v).strip()[:80] for k, v in dados.items() if str(v).strip()}
+            except (OSError, ValueError, AttributeError) as erro:
+                print(f"Aviso: não foi possível ler {cls.ficheiro_postos}: {erro}")
+                mapa = {}
+            cls._postos_cache = (mtime, mapa)
+        return cls._postos_cache[1]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -77,6 +101,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, estado, dados):
         self._responder(estado, json.dumps(dados, ensure_ascii=False))
+
+    def _ip_cliente(self) -> str:
+        if Config.confiar_proxy and self.headers.get("X-Forwarded-For"):
+            return self.headers["X-Forwarded-For"].split(",")[0].strip()
+        return self.client_address[0]
 
     def _autorizado(self, qs) -> bool:
         if not Config.token:
@@ -116,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     dados = analytics.metricas(
                         conn, periodo=arg("periodo", "30d"), inicio=arg("inicio"), fim=arg("fim"),
-                        agrupar=arg("agrupar", "dia"), fuso_horas=Config.fuso,
+                        agrupar=arg("agrupar", "dia"), fuso_horas=Config.fuso, posto=arg("posto"),
                         limite=max(1, min(100, int(arg("limite", "10")))))
                 finally:
                     conn.close()
@@ -129,6 +158,16 @@ class Handler(BaseHTTPRequestHandler):
                                        {"Content-Disposition": f'attachment; filename="{nome}"'})
             except ValueError as erro:
                 return self._json(HTTPStatus.BAD_REQUEST, {"erro": str(erro)})
+
+        if url.path == "/api/postos":
+            if not self._autorizado(qs):
+                return self._json(HTTPStatus.UNAUTHORIZED, {"erro": "token em falta ou inválido"})
+            conn = analytics.ligar(Config.bd)
+            try:
+                nomes = sorted(set(analytics.lista_postos(conn)) | set(Config.postos_por_ip().values()))
+            finally:
+                conn.close()
+            return self._json(HTTPStatus.OK, {"postos": nomes})
 
         if url.path == "/api/saude":
             return self._json(HTTPStatus.OK, {"estado": "ok"})
@@ -157,7 +196,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(HTTPStatus.BAD_REQUEST, {"erro": "esperava 'eventos': [...]"})
         conn = analytics.ligar(Config.bd)
         try:
-            aceites = analytics.inserir_eventos(conn, eventos[:MAX_EVENTOS_POR_PEDIDO])
+            aceites = analytics.inserir_eventos(conn, eventos[:MAX_EVENTOS_POR_PEDIDO],
+                                                posto_omissao=Config.postos_por_ip().get(self._ip_cliente()))
         finally:
             conn.close()
         self._json(HTTPStatus.OK, {"aceites": aceites, "rejeitados": len(eventos) - aceites})
@@ -176,6 +216,9 @@ def main():
     print(f"Demo:        http://{args.host}:{args.porta}/demo")
     print(f"Recolha:     POST http://{args.host}:{args.porta}/api/eventos")
     print(f"Base dados:  {Path(Config.bd).resolve()}")
+    n = len(Config.postos_por_ip())
+    print(f"Computadores por IP: {n} em {Config.ficheiro_postos}" if n else
+          "Computadores por IP: nenhum (opcional, ver postos.exemplo.json)")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

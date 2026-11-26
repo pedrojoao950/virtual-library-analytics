@@ -109,6 +109,46 @@ class TestMetricas(unittest.TestCase):
         self.assertEqual(e["duracao_ms"], analytics.MAX_LEITURA_BLOCO_MS)
         self.assertEqual(e["ts"], 10 ** 12)  # relógio do cliente absurdo → hora de receção
 
+    def test_computadores(self):
+        agora = ms(HOJE, 12)
+        ev = [{"tipo": "presenca", "ts": agora - 60000, "sessao": "C", "posto": "PC-01", "duracao_ms": 60000},
+              {"tipo": "presenca", "ts": agora - 30 * 60000, "sessao": "D", "posto": "PC-02", "duracao_ms": 120000},
+              {"tipo": "pesquisa", "ts": agora - 60000, "sessao": "C", "termo": "x", "num_resultados": 0,
+               "posto": "PC-01"}]
+        self.assertEqual(analytics.inserir_eventos(self.conn, ev, agora_ms=agora), 3)
+        d = self.m(periodo="hoje", agora_ms=agora)
+        pcs = {c["posto"]: c for c in d["computadores"]}
+        self.assertTrue(pcs["PC-01"]["ativo_agora"])
+        self.assertFalse(pcs["PC-02"]["ativo_agora"])
+        self.assertEqual(pcs["PC-02"]["minutos_sem_atividade"], 30)
+        self.assertEqual(pcs["PC-01"]["pesquisas"], 1)
+        self.assertEqual(pcs["PC-01"]["sessoes"], 1)  # presença não conta como sessão
+        self.assertEqual(pcs["PC-02"]["sessoes"], 0)
+        self.assertIn(None, pcs)  # acessos sem computador identificado
+        # presença não altera as métricas de navegação
+        self.assertEqual(d["resumo"]["sessoes"], 2)
+        # filtro por computador
+        f = self.m(periodo="hoje", posto="PC-01", agora_ms=agora)
+        self.assertEqual(f["resumo"]["pesquisas"], 1)
+        self.assertEqual([c["posto"] for c in f["computadores"]], ["PC-01"])
+        sem = self.m(periodo="hoje", posto=analytics.SEM_POSTO, agora_ms=agora)
+        self.assertEqual(sem["resumo"]["pesquisas"], 2)
+        # posto atribuído pelo servidor (p. ex. por IP) quando o evento não traz um
+        analytics.inserir_eventos(self.conn, [{"tipo": "vista_pagina", "sessao": "E", "ts": agora}],
+                                  agora_ms=agora, posto_omissao="PC-03")
+        self.assertEqual(analytics.lista_postos(self.conn), ["PC-01", "PC-02", "PC-03"])
+
+    def test_migracao(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = os.path.join(tmp, "antiga.db")
+            import sqlite3
+            c = sqlite3.connect(caminho)
+            c.executescript(analytics.ESQUEMA.replace(",\n    posto          TEXT", ""))
+            c.close()
+            conn = analytics.ligar(caminho)
+            self.assertEqual(analytics.inserir_eventos(conn, [{"tipo": "vista_pagina", "sessao": "x", "posto": "PC"}]), 1)
+            conn.close()
+
     def test_csv(self):
         txt = analytics.para_csv(self.m(), "mais_lidos")
         self.assertTrue(txt.startswith("livro_id;titulo;minutos"))
@@ -148,6 +188,15 @@ class TestServidor(unittest.TestCase):
         with urllib.request.urlopen(self.url + "/api/exportar?periodo=hoje&tabela=nao_encontrados") as r:
             self.assertIn("text/csv", r.headers["Content-Type"])
             self.assertIn("ondjaki", r.read().decode("utf-8-sig"))
+        req = urllib.request.Request(self.url + "/api/eventos", data=json.dumps(
+            [{"tipo": "presenca", "sessao": "s2", "posto": "PC-07", "duracao_ms": 60000}]).encode())
+        urllib.request.urlopen(req).close()
+        with urllib.request.urlopen(self.url + "/api/postos") as r:
+            self.assertEqual(json.load(r)["postos"], ["PC-07"])
+        with urllib.request.urlopen(self.url + "/api/metricas?periodo=hoje&posto=PC-07") as r:
+            d = json.load(r)
+        self.assertTrue(d["computadores"][0]["ativo_agora"])
+        self.assertEqual(d["resumo"]["pesquisas"], 0)
         for p in ("/", "/tracker.js", "/demo"):
             with urllib.request.urlopen(self.url + p) as r:
                 self.assertEqual(r.status, 200)
