@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biblioteca Virtual — demonstração</title>
+<style>
+  :root { --bg:#f9f9f9; --card:#fff; --ink:#191919; --ink2:#666; --line:#e7e7e7; --accent:#257de0; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0b0b0b; --card:#191919; --ink:#efefef; --ink2:#9c9c9c; --line:#303030; --accent:#338ced; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  .nota { font-size:14px; color:var(--ink2); border:1px dashed var(--line); padding:8px 12px; border-radius:8px; }
+  form { display:flex; gap:8px; margin:16px 0; }
+  input { flex:1; min-width:0; padding:10px 12px; font:inherit; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); }
+  button { padding:10px 14px; font:inherit; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.sec { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  ul { list-style:none; padding:0; margin:0; }
+  li { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:8px; }
+  li a { color:var(--accent); font-weight:600; cursor:pointer; text-decoration:none; }
+  .autor { color:var(--ink2); font-size:14px; }
+  #leitor { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; }
+  #leitor p { max-width:65ch; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Biblioteca Virtual</h1>
+  <p class="nota">Página de demonstração: cada pesquisa, clique, leitura e pedido aqui é enviado ao servidor de métricas.
+    Abra o <a href="/">painel</a> noutro separador para ver os números a mudar.</p>
+
+  <section id="vista-pesquisa">
+    <form id="f">
+      <input id="q" data-ba-pesquisa placeholder="Título, autor ou assunto" aria-label="Pesquisar" autocomplete="off">
+      <button>Pesquisar</button>
+    </form>
+    <p id="estado" class="autor"></p>
+    <ul id="resultados"></ul>
+    <div id="pedido" hidden>
+      <p>Não encontrou o que procurava?</p>
+      <button class="sec" id="pedir">Pedir este livro à biblioteca</button>
+    </div>
+  </section>
+
+  <section id="vista-livro" hidden>
+    <button class="sec" id="voltar">← Voltar aos resultados</button>
+    <h2 id="titulo"></h2>
+    <p class="autor" id="autor"></p>
+    <button id="ler">Ler agora</button>
+    <div id="leitor" hidden>
+      <p>Texto de demonstração. O tempo só conta enquanto este separador está visível e há interação
+        (rolar, teclar, tocar) nos últimos 2 minutos.</p>
+      <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer posuere erat a ante venenatis dapibus.
+        Maecenas faucibus mollis interdum. Cras mattis consectetur purus sit amet fermentum.</p>
+      <button class="sec" id="fechar">Fechar leitor</button>
+    </div>
+  </section>
+</main>
+
+<script src="/tracker.js"></script>
+<script>
+  const CATALOGO = [
+    ["mayombe", "Mayombe", "Pepetela"], ["geracao-utopia", "A Geração da Utopia", "Pepetela"],
+    ["luuanda", "Luuanda", "José Luandino Vieira"], ["vendedor-passados", "O Vendedor de Passados", "José Eduardo Agualusa"],
+    ["teoria-esquecimento", "Teoria Geral do Esquecimento", "José Eduardo Agualusa"],
+    ["sagrada-esperanca", "Sagrada Esperança", "Agostinho Neto"], ["bom-dia-camaradas", "Bom Dia Camaradas", "Ondjaki"],
+    ["os-da-minha-rua", "Os da Minha Rua", "Ondjaki"], ["terra-sonambula", "Terra Sonâmbula", "Mia Couto"],
+    ["os-lusiadas", "Os Lusíadas", "Luís de Camões"], ["memorial-convento", "Memorial do Convento", "José Saramago"],
+    ["ensaio-cegueira", "Ensaio sobre a Cegueira", "José Saramago"], ["calculo-1", "Cálculo — Volume 1", "James Stewart"],
+    ["algoritmos", "Introdução aos Algoritmos", "Cormen et al."], ["direito-constitucional", "Direito Constitucional Angolano", "Vários"],
+  ].map(([id, titulo, autor]) => ({ id, titulo, autor }));
+
+  const BA = window.BibliotecaAnalytics;
+  const $ = (id) => document.getElementById(id);
+  const semAcentos = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  let livroAtual = null, ultimoTermo = "";
+
+  $("f").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const termo = $("q").value.trim();
+    if (!termo) return;
+    ultimoTermo = termo;
+    const t = semAcentos(termo);
+    const achados = CATALOGO.filter((l) => semAcentos(l.titulo + " " + l.autor).includes(t));
+    BA.pesquisa(termo, achados.length);
+    $("estado").textContent = achados.length ? `${achados.length} resultado(s) para “${termo}”` : `Sem resultados para “${termo}”.`;
+    $("pedido").hidden = achados.length > 0;
+    const ul = $("resultados");
+    ul.replaceChildren();
+    achados.forEach((l, i) => {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.textContent = l.titulo;
+      a.addEventListener("click", () => { BA.cliqueResultado(l.id, l.titulo, i + 1); abrirLivro(l); });
+      const autor = document.createElement("div");
+      autor.className = "autor";
+      autor.textContent = l.autor;
+      li.append(a, autor);
+      ul.append(li);
+    });
+  });
+
+  $("pedir").addEventListener("click", () => {
+    BA.naoEncontrado(ultimoTermo);
+    $("pedido").textContent = "Pedido registado. Obrigado!";
+  });
+
+  function abrirLivro(l) {
+    livroAtual = l;
+    BA.vistaLivro(l.id, l.titulo);
+    $("titulo").textContent = l.titulo;
+    $("autor").textContent = l.autor;
+    $("vista-pesquisa").hidden = true;
+    $("vista-livro").hidden = false;
+    $("leitor").hidden = true;
+  }
+  $("ler").addEventListener("click", () => { $("leitor").hidden = false; BA.iniciarLeitura(livroAtual.id, livroAtual.titulo); });
+  $("fechar").addEventListener("click", () => { $("leitor").hidden = true; BA.terminarLeitura(); });
+  $("voltar").addEventListener("click", () => {
+    BA.terminarLeitura();
+    $("vista-livro").hidden = true;
+    $("vista-pesquisa").hidden = false;
+  });
+</script>
+</body>
+</html>

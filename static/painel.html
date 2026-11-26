@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Métricas da Biblioteca</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:#f9f9f9; --surface:#ffffff; --ink:#191919; --ink2:#666666;
+    --grid:#e7e7e7; --axis:#c2c2c2; --border:rgba(11,11,11,.10); --wash:rgba(11,11,11,.05);
+    --s1:#257de0; --s2:#f47230; --s3:#00b894; --good:#006c10;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:#0b0b0b; --surface:#191919; --ink:#efefef; --ink2:#9c9c9c;
+      --grid:#303030; --axis:#474747; --border:rgba(255,255,255,.10); --wash:rgba(255,255,255,.06);
+      --s1:#338ced; --s2:#e76624; --s3:#00a888; --good:#53c556;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:#0b0b0b; --surface:#191919; --ink:#efefef; --ink2:#9c9c9c;
+    --grid:#303030; --axis:#474747; --border:rgba(255,255,255,.10); --wash:rgba(255,255,255,.06);
+    --s1:#338ced; --s2:#e76624; --s3:#00a888; --good:#53c556;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--ink); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:1180px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:0 0 2px; }
+  .sub { color:var(--ink2); font-size:13px; margin:0 0 12px; }
+  .filtros { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:16px 0 20px; }
+  .grupo { display:inline-flex; flex-wrap:wrap; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--surface); }
+  .grupo button { border:0; background:none; color:var(--ink); padding:7px 11px; font:inherit; font-size:14px; cursor:pointer; }
+  .grupo button:hover { background:var(--wash); }
+  .grupo button[aria-pressed="true"] { font-weight:700; box-shadow: inset 0 -2px 0 var(--s1); }
+  input[type=date] { font:inherit; font-size:14px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--ink); }
+  #personalizado[hidden] { display:none; }
+  #personalizado { display:inline-flex; gap:6px; align-items:center; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; margin-bottom:20px; }
+  .kpi { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+  .kpi .rot { color:var(--ink2); font-size:13px; }
+  .kpi .val { font-size:26px; font-weight:650; margin-top:2px; }
+  .kpi .aj { color:var(--ink2); font-size:12px; }
+  .grelha { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr)); gap:16px; }
+  .cartao { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; min-width:0; }
+  .grafico { position:relative; width:100%; }
+  .grafico svg { display:block; width:100%; height:auto; overflow:visible; }
+  .carregando .grafico, .carregando .kpis, .carregando table { opacity:.5; transition:opacity .15s; }
+  .legenda { display:flex; flex-wrap:wrap; gap:14px; font-size:13px; color:var(--ink2); margin:0 0 6px; }
+  .legenda span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px; background:var(--c); }
+  details { margin-top:8px; font-size:13px; color:var(--ink2); }
+  summary { cursor:pointer; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--grid); vertical-align:middle; }
+  th { color:var(--ink2); font-weight:600; font-size:12px; }
+  td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .barra { height:6px; border-radius:0 3px 3px 0; background:var(--s1); margin-top:4px; min-width:2px; }
+  .cab { display:flex; justify-content:space-between; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .cab a { font-size:13px; color:var(--s1); text-decoration:none; }
+  .vazio { color:var(--ink2); font-size:14px; padding:12px 0; }
+  .tabela-wrap { overflow-x:auto; }
+  @media (max-width:560px) { .kpi .val { font-size:22px; } td, th { padding:6px 4px; } }
+  #dica { position:fixed; pointer-events:none; z-index:10; background:var(--surface); color:var(--ink); border:1px solid var(--border);
+          border-radius:8px; padding:8px 10px; font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.15); display:none; min-width:140px; }
+  #dica .t { color:var(--ink2); margin-bottom:4px; }
+  #dica .l { display:flex; align-items:center; gap:8px; }
+  #dica .l i { width:12px; height:2px; background:var(--c); display:inline-block; }
+  #dica .l b { font-variant-numeric:tabular-nums; }
+  #erro { color:#dc3c3d; font-size:14px; }
+  .alvo:focus { outline:2px solid var(--s1); outline-offset:1px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Métricas da Biblioteca Virtual</h1>
+  <p class="sub" id="intervalo">—</p>
+
+  <div class="filtros" role="group" aria-label="Filtros">
+    <div class="grupo" id="periodos" aria-label="Período">
+      <button data-p="hoje">Hoje</button><button data-p="7d">7 dias</button><button data-p="30d">30 dias</button>
+      <button data-p="90d">90 dias</button><button data-p="12m">12 meses</button><button data-p="custom">Personalizado</button>
+    </div>
+    <span id="personalizado" hidden>
+      <input type="date" id="ini" aria-label="Início"> – <input type="date" id="fim" aria-label="Fim">
+    </span>
+    <div class="grupo" id="agrupamentos" aria-label="Agrupar por">
+      <button data-a="dia">Diário</button><button data-a="semana">Semanal</button><button data-a="mes">Mensal</button>
+    </div>
+    <span id="erro" role="alert"></span>
+  </div>
+
+  <div id="conteudo">
+    <section class="kpis" id="kpis" aria-label="Indicadores"></section>
+
+    <div class="grelha">
+      <section class="cartao">
+        <h2>Tempo de leitura</h2><p class="sub">Minutos de leitura ativa por período</p>
+        <div class="grafico" id="g-leitura"></div>
+        <details><summary>Ver tabela</summary><div class="tabela-wrap" id="t-leitura"></div></details>
+      </section>
+      <section class="cartao">
+        <h2>Pesquisas e resultado</h2><p class="sub">Pesquisas por período, segundo o que aconteceu a seguir</p>
+        <div class="legenda" id="leg-pesquisas"></div>
+        <div class="grafico" id="g-pesquisas"></div>
+        <details><summary>Ver tabela</summary><div class="tabela-wrap" id="t-pesquisas"></div></details>
+      </section>
+      <section class="cartao">
+        <h2>Tempo médio de pesquisa</h2><p class="sub">Segundos desde começar a escrever até abrir um resultado</p>
+        <div class="grafico" id="g-tempo"></div>
+        <details><summary>Ver tabela</summary><div class="tabela-wrap" id="t-tempo"></div></details>
+      </section>
+      <section class="cartao">
+        <h2>Atividade por hora do dia</h2><p class="sub">Pesquisas feitas em cada hora (todo o período)</p>
+        <div class="grafico" id="g-hora"></div>
+        <details><summary>Ver tabela</summary><div class="tabela-wrap" id="t-hora"></div></details>
+      </section>
+
+      <section class="cartao"><div class="cab"><h2>Livros mais lidos</h2><a data-csv="mais_lidos" href="#">Exportar CSV</a></div>
+        <p class="sub">Por tempo total de leitura</p><div class="tabela-wrap" id="t-lidos"></div></section>
+      <section class="cartao"><div class="cab"><h2>Livros mais procurados</h2><a data-csv="mais_procurados_livros" href="#">Exportar CSV</a></div>
+        <p class="sub">Aberturas da ficha e cliques vindos da pesquisa</p><div class="tabela-wrap" id="t-procurados"></div></section>
+      <section class="cartao"><div class="cab"><h2>Termos mais pesquisados</h2><a data-csv="mais_procurados_termos" href="#">Exportar CSV</a></div>
+        <p class="sub">Sucesso = a pesquisa levou a abrir um resultado</p><div class="tabela-wrap" id="t-termos"></div></section>
+      <section class="cartao"><div class="cab"><h2>Não encontrados</h2><a data-csv="nao_encontrados" href="#">Exportar CSV</a></div>
+        <p class="sub">Pesquisas sem resultados e pedidos de livros que a biblioteca não tem</p><div class="tabela-wrap" id="t-nao"></div></section>
+    </div>
+  </div>
+</main>
+<div id="dica" role="tooltip"></div>
+
+<script>
+"use strict";
+const qs = new URLSearchParams(location.search);
+const token = qs.get("token");
+const estado = { periodo: qs.get("periodo") || "30d", agrupar: qs.get("agrupar") || "dia", inicio: qs.get("inicio") || "", fim: qs.get("fim") || "" };
+let dados = null;
+
+const $ = (id) => document.getElementById(id);
+const fmt = (v, casas = 0) => v === null || v === undefined ? "—" : Number(v).toLocaleString("pt-PT", { maximumFractionDigits: casas, minimumFractionDigits: 0 });
+const cor = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const MESES = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
+function rotuloPeriodo(k, curto) {
+  if (/^\d{4}-\d{2}$/.test(k)) { const [a, m] = k.split("-"); return MESES[+m - 1] + (curto ? "" : " " + a); }
+  const [a, m, d] = k.split("-");
+  return (estado.agrupar === "semana" && !curto ? "Semana de " : "") + `${+d} ${MESES[+m - 1]}` + (curto ? "" : " " + a);
+}
+function el(tag, attrs = {}, texto) {
+  const e = document.createElementNS(tag === "div" || tag === "span" ? "http://www.w3.org/1999/xhtml" : "http://www.w3.org/2000/svg", tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (texto !== undefined) e.textContent = texto;
+  return e;
+}
+// máximo do eixo = 4 × um passo "redondo" (1, 2, 2,5, 5 × 10^n) para marcas legíveis
+function maxBonito(v) {
+  if (v <= 0) return 4;
+  const bruto = v / 4, p = Math.pow(10, Math.floor(Math.log10(bruto)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= bruto) return 4 * m * p;
+  return 40 * p;
+}
+
+// ------------------------------------------------------------------ dica (tooltip)
+const dica = $("dica");
+function mostrarDica(ev, titulo, linhas) {
+  dica.replaceChildren();
+  const t = document.createElement("div"); t.className = "t"; t.textContent = titulo; dica.append(t);
+  for (const [nome, valor, c] of linhas) {
+    const l = document.createElement("div"); l.className = "l";
+    const i = document.createElement("i"); i.style.setProperty("--c", c);
+    const b = document.createElement("b"); b.textContent = valor;
+    const s = document.createElement("span"); s.textContent = nome;
+    l.append(i, b, s); dica.append(l);
+  }
+  dica.style.display = "block";
+  let x, y;
+  if (ev.clientX !== undefined && ev.type !== "focus") { x = ev.clientX; y = ev.clientY; }
+  else { const r = ev.target.getBoundingClientRect(); x = r.left + r.width / 2; y = r.top; }
+  const w = dica.offsetWidth, h = dica.offsetHeight;
+  dica.style.left = Math.max(8, Math.min(innerWidth - w - 8, x + 12)) + "px";
+  dica.style.top = Math.max(8, y - h - 12) + "px";
+}
+const esconderDica = () => { dica.style.display = "none"; };
+
+// ------------------------------------------------------------------ gráficos
+// Colunas (simples ou empilhadas). series: [{chave, nome, varCor}]
+function colunas(alvo, linhas, series, { rotulo, formato = (v) => fmt(v, 1), altura = 220 } = {}) {
+  alvo.replaceChildren();
+  const W = Math.max(280, alvo.clientWidth), H = altura, m = { t: 8, r: 4, b: 26, l: 40 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const total = (d) => series.reduce((s, x) => s + (d[x.chave] || 0), 0);
+  const ymax = maxBonito(Math.max(0, ...linhas.map(total)));
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": series.map((s) => s.nome).join(", ") });
+  for (let i = 0; i <= 4; i++) {
+    const y = m.t + ih - (ih * i) / 4;
+    svg.append(el("line", { x1: m.l, x2: W - m.r, y1: y, y2: y, stroke: i ? cor("--grid") : cor("--axis"), "stroke-width": 1 }));
+    svg.append(el("text", { x: m.l - 6, y: y + 4, "text-anchor": "end", "font-size": 11, fill: cor("--ink2") }, fmt((ymax * i) / 4, 1)));
+  }
+  const n = linhas.length, passo = iw / Math.max(1, n);
+  const gap = passo > 6 ? 2 : 0, bw = Math.max(1, Math.min(48, passo - gap));
+  const cada = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(iw / 70))));
+  linhas.forEach((d, i) => {
+    const x = m.l + i * passo + (passo - bw) / 2;
+    let base = m.t + ih;
+    const g = el("g");
+    series.forEach((s, si) => {
+      const v = d[s.chave] || 0;
+      if (!v) return;
+      const h = (v / ymax) * ih;
+      const topo = si === series.length - 1 || series.slice(si + 1).every((o) => !(d[o.chave] || 0));
+      const y = base - h;
+      const r = topo ? Math.min(4, bw / 2, h) : 0;
+      // retângulo com cantos superiores arredondados apenas no segmento do topo
+      const path = `M${x},${base} V${y + r} Q${x},${y} ${x + r},${y} H${x + bw - r} Q${x + bw},${y} ${x + bw},${y + r} V${base} Z`;
+      g.append(el("path", { d: path, fill: cor(s.varCor) }));
+      base = y;
+      // separação de 2px (cor da superfície) entre segmentos empilhados
+      if (gap && !topo) g.append(el("line", { x1: x, x2: x + bw, y1: y, y2: y, stroke: cor("--surface"), "stroke-width": 2 }));
+    });
+    const hit = el("rect", { x: m.l + i * passo, y: m.t, width: passo, height: ih, fill: "transparent", tabindex: 0, class: "alvo" });
+    const tit = rotulo(d.periodo ?? d.hora);
+    const mostra = (ev) => { g.setAttribute("opacity", ".8"); mostrarDica(ev, tit, series.map((s) => [s.nome, formato(d[s.chave] || 0), cor(s.varCor)]).reverse()); };
+    hit.addEventListener("pointermove", mostra); hit.addEventListener("focus", mostra);
+    const sai = () => { g.removeAttribute("opacity"); esconderDica(); };
+    hit.addEventListener("pointerleave", sai); hit.addEventListener("blur", sai);
+    svg.append(g, hit);
+    if (i % cada === 0) svg.append(el("text", { x: m.l + i * passo + passo / 2, y: H - 8, "text-anchor": "middle", "font-size": 11, fill: cor("--ink2") }, rotulo(d.periodo ?? d.hora, true)));
+  });
+  alvo.append(svg);
+}
+
+function linha(alvo, linhas, chave, nome, { formato = (v) => fmt(v, 1) + " s", altura = 220 } = {}) {
+  alvo.replaceChildren();
+  const W = Math.max(280, alvo.clientWidth), H = altura, m = { t: 10, r: 8, b: 26, l: 40 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const vals = linhas.map((d) => d[chave]);
+  const ymax = maxBonito(Math.max(0, ...vals.filter((v) => v !== null)));
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": nome });
+  for (let i = 0; i <= 4; i++) {
+    const y = m.t + ih - (ih * i) / 4;
+    svg.append(el("line", { x1: m.l, x2: W - m.r, y1: y, y2: y, stroke: i ? cor("--grid") : cor("--axis") }));
+    svg.append(el("text", { x: m.l - 6, y: y + 4, "text-anchor": "end", "font-size": 11, fill: cor("--ink2") }, fmt((ymax * i) / 4, 1)));
+  }
+  const n = linhas.length;
+  const X = (i) => m.l + (n === 1 ? iw / 2 : (iw * i) / (n - 1));
+  const Y = (v) => m.t + ih - (v / ymax) * ih;
+  let d = "", aberto = false;
+  vals.forEach((v, i) => { if (v === null) { aberto = false; return; } d += (aberto ? "L" : "M") + X(i) + "," + Y(v); aberto = true; });
+  svg.append(el("path", { d, fill: "none", stroke: cor("--s1"), "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  vals.forEach((v, i) => {
+    const vizinhoVazio = (vals[i - 1] ?? null) === null && (vals[i + 1] ?? null) === null;
+    if (v !== null && (vizinhoVazio || n <= 31)) svg.append(el("circle", { cx: X(i), cy: Y(v), r: n <= 31 ? 3 : 4, fill: cor("--s1"), stroke: cor("--surface"), "stroke-width": 2 }));
+  });
+  const cada = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(iw / 70))));
+  linhas.forEach((row, i) => { if (i % cada === 0) svg.append(el("text", { x: X(i), y: H - 8, "text-anchor": "middle", "font-size": 11, fill: cor("--ink2") }, rotuloPeriodo(row.periodo, true))); });
+  const mira = el("line", { y1: m.t, y2: m.t + ih, stroke: cor("--axis"), "stroke-width": 1, visibility: "hidden" });
+  const ponto = el("circle", { r: 5, fill: cor("--s1"), stroke: cor("--surface"), "stroke-width": 2, visibility: "hidden" });
+  const area = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent", tabindex: 0, class: "alvo" });
+  let foco = n - 1;
+  const mostrar = (i, ev) => {
+    const v = vals[i];
+    mira.setAttribute("x1", X(i)); mira.setAttribute("x2", X(i)); mira.setAttribute("visibility", "visible");
+    if (v !== null) { ponto.setAttribute("cx", X(i)); ponto.setAttribute("cy", Y(v)); ponto.setAttribute("visibility", "visible"); } else ponto.setAttribute("visibility", "hidden");
+    mostrarDica(ev, rotuloPeriodo(linhas[i].periodo), [[nome, v === null ? "sem dados" : formato(v), cor("--s1")]]);
+  };
+  area.addEventListener("pointermove", (ev) => {
+    const r = svg.getBoundingClientRect(), x = ((ev.clientX - r.left) / r.width) * W;
+    foco = Math.max(0, Math.min(n - 1, Math.round(((x - m.l) / iw) * (n - 1)))); mostrar(foco, ev);
+  });
+  area.addEventListener("focus", (ev) => mostrar(foco, ev));
+  area.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") { foco = Math.max(0, Math.min(n - 1, foco + (ev.key === "ArrowLeft" ? -1 : 1))); mostrar(foco, { target: area, type: "focus" }); ev.preventDefault(); }
+  });
+  const sair = () => { mira.setAttribute("visibility", "hidden"); ponto.setAttribute("visibility", "hidden"); esconderDica(); };
+  area.addEventListener("pointerleave", sair); area.addEventListener("blur", sair);
+  svg.append(mira, ponto, area);
+  alvo.append(svg);
+}
+
+// ------------------------------------------------------------------ tabelas
+function tabela(alvo, linhas, colunasDef, { barra } = {}) {
+  alvo.replaceChildren();
+  if (!linhas.length) { const p = document.createElement("p"); p.className = "vazio"; p.textContent = "Sem dados neste período."; alvo.append(p); return; }
+  const t = document.createElement("table"), th = t.createTHead().insertRow(), tb = t.createTBody();
+  for (const c of colunasDef) { const h = document.createElement("th"); h.textContent = c.nome; if (c.num) h.className = "n"; th.append(h); }
+  const max = barra ? Math.max(...linhas.map((r) => r[barra] || 0)) || 1 : 1;
+  for (const r of linhas) {
+    const tr = tb.insertRow();
+    colunasDef.forEach((c, ci) => {
+      const td = tr.insertCell();
+      td.textContent = c.f ? c.f(r[c.chave], r) : (r[c.chave] ?? "—");
+      if (c.num) td.className = "n";
+      if (barra && ci === 0) { const b = document.createElement("div"); b.className = "barra"; b.style.width = (100 * (r[barra] || 0) / max) + "%"; td.append(b); }
+    });
+  }
+  alvo.append(t);
+}
+
+// ------------------------------------------------------------------ KPIs
+function kpis(r) {
+  const itens = [
+    ["Sessões", fmt(r.sessoes), `${fmt(r.utilizadores)} utilizadores únicos`],
+    ["Pesquisas", fmt(r.pesquisas), `${fmt(r.pesquisas_por_sessao, 1)} por sessão com pesquisa`],
+    ["Taxa de sucesso da pesquisa", r.taxa_sucesso_pesquisa === null ? "—" : fmt(r.taxa_sucesso_pesquisa, 1) + "%", "pesquisas que levaram a abrir um livro"],
+    ["Pesquisas sem resultados", r.taxa_sem_resultados === null ? "—" : fmt(r.taxa_sem_resultados, 1) + "%", `${fmt(r.pedidos_nao_encontrados)} pedidos de livros em falta`],
+    ["Tempo médio de pesquisa", r.tempo_medio_pesquisa_total_s === null ? "—" : fmt(r.tempo_medio_pesquisa_total_s, 1) + " s", `escrever ${fmt(r.tempo_medio_escrita_pesquisa_s, 1)} s · escolher ${fmt(r.tempo_medio_ate_encontrar_s, 1)} s`],
+    ["Posição média do clique", fmt(r.posicao_media_clique, 1), "1 = o primeiro resultado"],
+    ["Tempo de leitura", fmt(r.tempo_leitura_total_min / 60, 1) + " h", `${fmt(r.livros_lidos)} livros lidos`],
+    ["Leitores", fmt(r.leitores), `${fmt(r.tempo_leitura_medio_por_leitor_min, 1)} min por leitor`],
+    ["Duração média da sessão", r.duracao_media_sessao_min === null ? "—" : fmt(r.duracao_media_sessao_min, 1) + " min", `${fmt(r.vistas_livro)} fichas de livro abertas`],
+  ];
+  const alvo = $("kpis"); alvo.replaceChildren();
+  for (const [rot, val, aj] of itens) {
+    const d = document.createElement("div"); d.className = "kpi";
+    for (const [c, t] of [["rot", rot], ["val", val], ["aj", aj]]) { const s = document.createElement("div"); s.className = c; s.textContent = t; d.append(s); }
+    alvo.append(d);
+  }
+}
+
+// ------------------------------------------------------------------ render
+const SERIES_PESQ = [
+  { chave: "com_sucesso", nome: "Abriu um resultado", varCor: "--s1" },
+  { chave: "sem_clique", nome: "Não abriu nenhum", varCor: "--s2" },
+  { chave: "sem_resultados", nome: "Sem resultados", varCor: "--s3" },
+];
+function desenhar() {
+  if (!dados) return;
+  const s = dados.serie, rp = (k, c) => rotuloPeriodo(k, c);
+  const iv = dados.intervalo;
+  $("intervalo").textContent = `${rotuloPeriodo(iv.inicio)} – ${rotuloPeriodo(iv.fim)} · agrupado por ${{ dia: "dia", semana: "semana", mes: "mês" }[iv.agrupar]} · fuso UTC${iv.fuso_horas >= 0 ? "+" : ""}${iv.fuso_horas}`
+    .replace("Semana de ", "");
+  kpis(dados.resumo);
+  colunas($("g-leitura"), s, [{ chave: "minutos_leitura", nome: "Minutos de leitura", varCor: "--s1" }], { rotulo: rp, formato: (v) => fmt(v, 1) + " min" });
+  colunas($("g-pesquisas"), s, SERIES_PESQ, { rotulo: rp, formato: (v) => fmt(v) });
+  linha($("g-tempo"), s, "tempo_medio_pesquisa_s", "Tempo médio de pesquisa");
+  colunas($("g-hora"), dados.por_hora, [{ chave: "pesquisas", nome: "Pesquisas", varCor: "--s1" }], { rotulo: (h, c) => c ? String(h) + "h" : `${h}:00–${h}:59`, formato: (v) => fmt(v), altura: 180 });
+  const leg = $("leg-pesquisas"); leg.replaceChildren();
+  for (const x of SERIES_PESQ) { const sp = document.createElement("span"); sp.style.setProperty("--c", cor(x.varCor)); sp.textContent = x.nome; leg.append(sp); }
+
+  const per = { nome: "Período", chave: "periodo", f: (v) => rotuloPeriodo(v) };
+  tabela($("t-leitura"), s, [per, { nome: "Minutos", chave: "minutos_leitura", num: 1, f: (v) => fmt(v, 1) }, { nome: "Leitores", chave: "leitores", num: 1 }]);
+  tabela($("t-pesquisas"), s, [per, { nome: "Total", chave: "pesquisas", num: 1 }, ...SERIES_PESQ.map((x) => ({ nome: x.nome, chave: x.chave, num: 1 }))]);
+  tabela($("t-tempo"), s, [per, { nome: "Segundos", chave: "tempo_medio_pesquisa_s", num: 1, f: (v) => fmt(v, 1) }, { nome: "Sessões", chave: "sessoes", num: 1 }]);
+  tabela($("t-hora"), dados.por_hora, [{ nome: "Hora", chave: "hora", f: (h) => `${h}:00` }, { nome: "Pesquisas", chave: "pesquisas", num: 1 }, { nome: "Min. leitura", chave: "minutos_leitura", num: 1, f: (v) => fmt(v, 1) }]);
+
+  tabela($("t-lidos"), dados.mais_lidos, [{ nome: "Livro", chave: "titulo", f: (v, r) => v || r.livro_id }, { nome: "Minutos", chave: "minutos", num: 1, f: (v) => fmt(v, 1) }, { nome: "Leitores", chave: "leitores", num: 1 }], { barra: "minutos" });
+  const procurados = dados.mais_procurados_livros.map((r) => ({ ...r, total: r.vistas + r.cliques_pesquisa }));
+  tabela($("t-procurados"), procurados, [{ nome: "Livro", chave: "titulo", f: (v, r) => v || r.livro_id }, { nome: "Fichas abertas", chave: "vistas", num: 1 }, { nome: "Cliques na pesquisa", chave: "cliques_pesquisa", num: 1 }, { nome: "Utilizadores", chave: "utilizadores", num: 1 }], { barra: "total" });
+  tabela($("t-termos"), dados.mais_procurados_termos, [{ nome: "Termo", chave: "termo" }, { nome: "Pesquisas", chave: "pesquisas", num: 1 }, { nome: "Sucesso", chave: "taxa_sucesso", num: 1, f: (v) => fmt(v, 1) + "%" }, { nome: "Resultados (média)", chave: "resultados_medios", num: 1, f: (v) => fmt(v, 1) }], { barra: "pesquisas" });
+  tabela($("t-nao"), dados.nao_encontrados, [{ nome: "Termo / título", chave: "termo" }, { nome: "Vezes", chave: "vezes", num: 1 }, { nome: "Pedidos", chave: "pedidos_explicitos", num: 1 }, { nome: "Última vez", chave: "ultima_vez", num: 1 }], { barra: "vezes" });
+}
+
+function parametros(extra = {}) {
+  const p = new URLSearchParams();
+  if (estado.periodo === "custom") { if (estado.inicio) p.set("inicio", estado.inicio); if (estado.fim) p.set("fim", estado.fim); }
+  else p.set("periodo", estado.periodo);
+  p.set("agrupar", estado.agrupar);
+  if (token) p.set("token", token);
+  for (const k in extra) p.set(k, extra[k]);
+  return p;
+}
+
+async function carregar() {
+  for (const b of document.querySelectorAll("#periodos button")) b.setAttribute("aria-pressed", b.dataset.p === estado.periodo);
+  for (const b of document.querySelectorAll("#agrupamentos button")) b.setAttribute("aria-pressed", b.dataset.a === estado.agrupar);
+  $("personalizado").hidden = estado.periodo !== "custom";
+  if (estado.periodo === "custom" && !(estado.inicio && estado.fim)) return;
+  const vis = parametros(); vis.delete("token"); if (token) vis.set("token", token);
+  history.replaceState(null, "", "?" + vis.toString());
+  document.body.classList.add("carregando");
+  try {
+    const r = await fetch("/api/metricas?" + parametros().toString());
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || r.status);
+    dados = j; $("erro").textContent = "";
+    desenhar();
+  } catch (e) {
+    $("erro").textContent = "Não foi possível carregar as métricas: " + e.message;
+  } finally {
+    document.body.classList.remove("carregando");
+  }
+}
+
+$("periodos").addEventListener("click", (e) => { const p = e.target.dataset && e.target.dataset.p; if (p) { estado.periodo = p; carregar(); } });
+$("agrupamentos").addEventListener("click", (e) => { const a = e.target.dataset && e.target.dataset.a; if (a) { estado.agrupar = a; carregar(); } });
+for (const id of ["ini", "fim"]) $(id).addEventListener("change", () => { estado.inicio = $("ini").value; estado.fim = $("fim").value; carregar(); });
+$("ini").value = estado.inicio; $("fim").value = estado.fim;
+if (estado.inicio || estado.fim) estado.periodo = "custom";
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest("a[data-csv]");
+  if (!a) return;
+  e.preventDefault();
+  location.href = "/api/exportar?" + parametros({ tabela: a.dataset.csv, limite: 100 }).toString();
+});
+let tempo; addEventListener("resize", () => { clearTimeout(tempo); tempo = setTimeout(desenhar, 150); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", desenhar);
+carregar();
+setInterval(() => { if (document.visibilityState === "visible" && estado.periodo === "hoje") carregar(); }, 60000);
+</script>
+</body>
+</html>
