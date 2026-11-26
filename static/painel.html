@@ -40,6 +40,9 @@
   #personalizado[hidden] { display:none; }
   select { font:inherit; font-size:14px; padding:6px 8px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--ink); max-width:100%; }
   .largo { grid-column:1 / -1; }
+  .botao { font-size:13px; color:var(--s1); cursor:pointer; margin-right:12px; }
+  .botao:hover { text-decoration:underline; }
+  #counter-dados[hidden], #counter-vazio[hidden] { display:none; }
   .estado { white-space:nowrap; }
   .estado::before { content:""; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:1px; background:var(--axis); }
   .estado.on::before { background:#0aac23; }
@@ -108,6 +111,23 @@
       <section class="cartao largo"><div class="cab"><h2>Computadores</h2><a data-csv="computadores" href="#">Exportar CSV</a></div>
         <p class="sub">Estado agora (ativo = deu sinal nos últimos 3 min) e utilização no período. Clique numa linha para ver só esse computador.</p>
         <div class="tabela-wrap" id="t-computadores"></div></section>
+      <section class="cartao largo" id="c-counter">
+        <div class="cab"><h2>Perlego — relatórios oficiais (COUNTER)</h2>
+          <span><label class="botao" for="f-counter">Importar relatório…</label>
+          <input type="file" id="f-counter" accept=".xlsx,.csv,.tsv,.txt" hidden>
+          <a data-csv="perlego_counter" href="#" id="csv-counter">Exportar CSV</a></span></div>
+        <p class="sub" id="counter-sub">Dados mensais por título enviados pela própria Perlego (todos os acessos da instituição, incluindo de casa). Não têm divisão por computador.</p>
+        <p id="counter-estado" class="sub" role="status"></p>
+        <div id="counter-vazio" class="vazio" hidden>Ainda não foi importado nenhum relatório para este período. O administrador da conta institucional
+          da Perlego descarrega-o em <b>Organisation Subscription Manager → Analytics → COUNTER</b> (relatório <b>TR_B1</b>, com detalhe mensal)
+          e importa-o aqui. Se ninguém na instituição tem acesso de administrador, peça-o ao vosso gestor de conta da Perlego.</div>
+        <div id="counter-dados" class="grelha">
+          <div><h2>Livros abertos por mês</h2><p class="sub">Unique_Title_Requests: nº de vezes que um título foi aberto (uma vez por sessão)</p>
+            <div class="grafico" id="g-counter"></div>
+            <details><summary>Ver tabela</summary><div class="tabela-wrap" id="t-counter-mes"></div></details></div>
+          <div><h2>Títulos mais lidos (Perlego)</h2><p class="sub" id="counter-meses"></p><div class="tabela-wrap" id="t-counter"></div></div>
+        </div>
+      </section>
       <section class="cartao">
         <h2>Tempo de leitura</h2><p class="sub">Minutos de leitura ativa por período</p>
         <div class="grafico" id="g-leitura"></div>
@@ -354,8 +374,24 @@ function semAtividade(m) {
   if (m < 48 * 60) return `há ${Math.floor(m / 60)} h`;
   return `há ${Math.floor(m / 1440)} dias`;
 }
+function desenharCounter(c) {
+  const ok = c && c.disponivel && c.por_mes.length;
+  $("counter-vazio").hidden = !!ok;
+  $("counter-dados").hidden = !ok;
+  $("csv-counter").hidden = !ok;
+  if (!ok) {
+    if (c && c.disponivel) $("counter-vazio").textContent = `Os relatórios importados cobrem ${c.meses_importados[0]} a ${c.meses_importados[1]}, fora do período escolhido.`;
+    return;
+  }
+  const mesRot = (k, curto) => rotuloPeriodo(k, curto);
+  colunas($("g-counter"), c.por_mes, [{ chave: "unicos", nome: "Livros abertos", varCor: "--s1" }], { rotulo: mesRot, formato: (v) => fmt(v), altura: 180 });
+  tabela($("t-counter-mes"), c.por_mes, [{ nome: "Mês", chave: "periodo", f: (v) => rotuloPeriodo(v) }, { nome: "Livros abertos", chave: "unicos", num: 1 }, { nome: "Pedidos totais", chave: "total", num: 1 }, { nome: "Títulos diferentes", chave: "titulos", num: 1 }]);
+  tabela($("t-counter"), c.mais_lidos, [{ nome: "Título", chave: "titulo" }, { nome: "Aberturas", chave: "unicos", num: 1 }, { nome: "Pedidos totais", chave: "total", num: 1 }], { barra: "unicos" });
+  $("counter-meses").textContent = `Meses do período com dados: ${rotuloPeriodo(c.por_mes[0].periodo)} – ${rotuloPeriodo(c.por_mes[c.por_mes.length - 1].periodo)} · ${fmt(c.total_unicos)} aberturas`;
+}
 function desenhar() {
   if (!dados) return;
+  desenharCounter(dados.perlego_counter);
   tabela($("t-computadores"), dados.computadores, [
     { nome: "Estado", chave: "ativo_agora", f: (v, r) => r.posto === null ? "—" : v ? "Ativo" : "Inativo", classe: (r) => r.posto === null ? "" : "estado" + (r.ativo_agora ? " on" : "") },
     { nome: "Computador", chave: "posto", f: (v) => nomePosto(v) },
@@ -436,6 +472,19 @@ async function carregar() {
 }
 
 $("periodos").addEventListener("click", (e) => { const p = e.target.dataset && e.target.dataset.p; if (p) { estado.periodo = p; carregar(); } });
+$("f-counter").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const est = $("counter-estado"); est.textContent = `A importar ${f.name}…`;
+  try {
+    const p = new URLSearchParams(); if (token) p.set("token", token);
+    const r = await fetch("/api/importar-counter?" + p, { method: "POST", body: f });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || r.status);
+    est.textContent = `Importado: ${j.relatorio}, ${fmt(j.titulos)} títulos, ${j.meses.join(" a ")}.`;
+    carregar();
+  } catch (erro) { est.textContent = "Não foi possível importar: " + erro.message; }
+  e.target.value = "";
+});
 $("posto").addEventListener("change", (e) => { estado.posto = e.target.value; carregar(); });
 $("agrupamentos").addEventListener("click", (e) => { const a = e.target.dataset && e.target.dataset.a; if (a) { estado.agrupar = a; carregar(); } });
 for (const id of ["ini", "fim"]) $(id).addEventListener("change", () => { estado.inicio = $("ini").value; estado.fim = $("fim").value; carregar(); });

@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "properties": {
+    "servidor":     { "type": "string", "title": "Endereço do servidor de métricas", "description": "Ex.: http://192.168.1.10:8080" },
+    "posto":        { "type": "string", "title": "Nome deste computador", "description": "Ex.: PC-01. Vazio = o servidor identifica pelo IP (postos.json)." },
+    "regexLivro":   { "type": "string", "title": "Expressão regular do endereço de um livro (1.º grupo = id)" },
+    "regexLeitor":  { "type": "string", "title": "Expressão regular do endereço do leitor" },
+    "regexPesquisa":{ "type": "string", "title": "Expressão regular do endereço da página de resultados" },
+    "diagnostico":  { "type": "boolean", "title": "Mostrar o que a extensão deteta (para afinar)" }
+  }
+}

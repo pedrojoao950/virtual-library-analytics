@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Biblioteca Analytics — Perlego",
+  "version": "1.0.0",
+  "description": "Recolhe métricas anónimas de utilização da Perlego nos computadores da biblioteca (pesquisas, livros abertos, tempo de leitura).",
+  "permissions": ["storage", "alarms", "idle"],
+  "host_permissions": ["https://*.perlego.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://*.perlego.com/*"], "js": ["config.js", "conteudo.js"], "run_at": "document_idle" }
+  ],
+  "options_page": "opcoes.html",
+  "storage": { "managed_schema": "schema.json" }
+}

@@ -406,6 +406,7 @@ def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None 
         "intervalo": {"inicio": d_ini.isoformat(), "fim": d_fim.isoformat(),
                       "agrupar": agrupar, "fuso_horas": fuso_horas, "posto": posto},
         "computadores": computadores(conn, a, b, posto, fuso_horas, agora_ms),
+        "perlego_counter": metricas_counter(conn, d_ini, d_fim, limite),
         "resumo": resumo,
         "mais_procurados_termos": termos,
         "mais_procurados_livros": livros_procurados,
@@ -464,7 +465,7 @@ def lista_postos(conn: sqlite3.Connection) -> list[str]:
         "SELECT DISTINCT posto FROM eventos WHERE posto IS NOT NULL ORDER BY posto")]
 
 
-TABELAS_EXPORTAVEIS = ("computadores", "mais_procurados_termos", "mais_procurados_livros", "mais_lidos",
+TABELAS_EXPORTAVEIS = ("perlego_counter", "computadores", "mais_procurados_termos", "mais_procurados_livros", "mais_lidos",
                        "nao_encontrados", "serie", "por_hora", "resumo")
 
 
@@ -474,6 +475,8 @@ def para_csv(dados: dict, tabela: str) -> str:
     if tabela not in TABELAS_EXPORTAVEIS:
         raise ValueError(f"tabela desconhecida: {tabela}")
     linhas = dados[tabela]
+    if tabela == "perlego_counter":
+        linhas = linhas.get("mais_lidos", [])
     if tabela == "resumo":
         linhas = [{"metrica": k, "valor": v} for k, v in linhas.items()]
     buf = io.StringIO()
@@ -482,3 +485,178 @@ def para_csv(dados: dict, tabela: str) -> str:
         w.writeheader()
         w.writerows(linhas)
     return buf.getvalue()
+
+
+# ======================================================= relatórios COUNTER (Perlego)
+# A Perlego (e outras plataformas) disponibilizam relatórios COUNTER 5/5.1 — p. ex. TR_B1
+# "Book Requests" — com métricas mensais por título (Total_Item_Requests, Unique_Title_Requests).
+# Aceitamos o formato tabular em CSV, TSV ou XLSX.
+
+ESQUEMA_COUNTER = """
+CREATE TABLE IF NOT EXISTS counter (
+    relatorio  TEXT NOT NULL,
+    titulo     TEXT NOT NULL,
+    editor     TEXT,
+    isbn       TEXT NOT NULL DEFAULT '',
+    metrica    TEXT NOT NULL,
+    mes        TEXT NOT NULL,          -- AAAA-MM
+    valor      INTEGER NOT NULL,
+    importado  INTEGER NOT NULL,
+    PRIMARY KEY (relatorio, titulo, isbn, metrica, mes)
+);
+"""
+
+_MESES_EN = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+
+
+def _mes_coluna(nome: str) -> str | None:
+    """'Jan-2026' / 'jan 2026' / '2026-01' → '2026-01'."""
+    import re
+    nome = (nome or "").strip()
+    m = re.fullmatch(r"([A-Za-z]{3})[-\s](\d{4})", nome)
+    if m and m.group(1).lower() in _MESES_EN:
+        return f"{m.group(2)}-{_MESES_EN[m.group(1).lower()]:02d}"
+    m = re.fullmatch(r"(\d{4})-(\d{2})(?:-\d{2})?", nome)
+    if m and 1 <= int(m.group(2)) <= 12:
+        return f"{m.group(1)}-{m.group(2)}"
+    return None
+
+
+def _linhas_xlsx(conteudo: bytes) -> list[list[str]]:
+    """Lê a primeira folha de um .xlsx só com a biblioteca padrão."""
+    import io
+    import re
+    import zipfile
+    from xml.etree import ElementTree as ET
+    ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(io.BytesIO(conteudo)) as z:
+        partilhadas = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            for si in ET.fromstring(z.read("xl/sharedStrings.xml")).findall("s:si", ns):
+                partilhadas.append("".join(t.text or "" for t in si.iter(f"{{{ns['s']}}}t")))
+        folhas = sorted(n for n in z.namelist() if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", n))
+        if not folhas:
+            raise ValueError("o ficheiro XLSX não tem folhas")
+        raiz = ET.fromstring(z.read(folhas[0]))
+    linhas = []
+    for row in raiz.iter(f"{{{ns['s']}}}row"):
+        valores: dict[int, str] = {}
+        for c in row.findall("s:c", ns):
+            ref = c.get("r", "")
+            letras = re.match(r"[A-Z]+", ref)
+            col = 0
+            for ch in (letras.group(0) if letras else ""):
+                col = col * 26 + ord(ch) - 64
+            col = (col - 1) if col else len(valores)
+            tipo = c.get("t")
+            if tipo == "inlineStr":
+                v = "".join(t.text or "" for t in c.iter(f"{{{ns['s']}}}t"))
+            else:
+                el = c.find("s:v", ns)
+                v = el.text if el is not None and el.text is not None else ""
+                if tipo == "s" and v:
+                    v = partilhadas[int(v)]
+            valores[col] = v
+        if valores:
+            linhas.append([valores.get(i, "") for i in range(max(valores) + 1)])
+    return linhas
+
+
+def _linhas_texto(conteudo: bytes) -> list[list[str]]:
+    import csv
+    import io
+    for cod in ("utf-8-sig", "utf-16", "latin-1"):
+        try:
+            texto = conteudo.decode(cod)
+            break
+        except UnicodeDecodeError:
+            continue
+    amostra = texto[:5000]
+    sep = max(("\t", ";", ","), key=amostra.count)
+    return [linha for linha in csv.reader(io.StringIO(texto), delimiter=sep)]
+
+
+def ler_counter(conteudo: bytes) -> dict:
+    """Interpreta um relatório COUNTER tabular. Devolve {relatorio, registos: [...]}"""
+    linhas = _linhas_xlsx(conteudo) if conteudo[:2] == b"PK" else _linhas_texto(conteudo)
+    relatorio = "desconhecido"
+    cab = None
+    for i, linha in enumerate(linhas):
+        celulas = [c.strip() for c in linha]
+        if celulas and celulas[0] == "Report_ID" and len(celulas) > 1 and celulas[1]:
+            relatorio = celulas[1]
+        if "Metric_Type" in celulas and any(c in celulas for c in ("Title", "Platform", "Database", "Item")):
+            cab = i
+            break
+    if cab is None:
+        raise ValueError("não parece um relatório COUNTER: falta a linha de cabeçalho com 'Metric_Type'")
+    nomes = [c.strip() for c in linhas[cab]]
+    col_titulo = next(nomes.index(c) for c in ("Title", "Item", "Database", "Platform") if c in nomes)
+    col_metrica = nomes.index("Metric_Type")
+    col_editor = nomes.index("Publisher") if "Publisher" in nomes else None
+    col_isbn = nomes.index("ISBN") if "ISBN" in nomes else None
+    meses = [(i, _mes_coluna(n)) for i, n in enumerate(nomes) if _mes_coluna(n)]
+    if not meses:
+        raise ValueError("o relatório não tem colunas mensais (ex.: 'Jan-2026'); "
+                         "descarregue-o sem a opção Exclude_Monthly_Details")
+    registos = []
+    for linha in linhas[cab + 1:]:
+        if len(linha) <= col_metrica or not linha[col_titulo].strip():
+            continue
+        for i, mes in meses:
+            bruto = linha[i].strip().replace(" ", "") if i < len(linha) else ""
+            if not bruto:
+                continue
+            try:
+                valor = int(float(bruto.replace(",", ".")))
+            except ValueError:
+                continue
+            registos.append({
+                "titulo": linha[col_titulo].strip()[:MAX_TEXTO],
+                "editor": (linha[col_editor].strip()[:MAX_TEXTO] or None) if col_editor is not None and col_editor < len(linha) else None,
+                "isbn": linha[col_isbn].strip()[:40] if col_isbn is not None and col_isbn < len(linha) else "",
+                "metrica": linha[col_metrica].strip()[:60],
+                "mes": mes, "valor": valor,
+            })
+    return {"relatorio": relatorio, "registos": registos}
+
+
+def importar_counter(conn: sqlite3.Connection, conteudo: bytes) -> dict:
+    dados = ler_counter(conteudo)
+    conn.executescript(ESQUEMA_COUNTER)
+    agora = int(time.time() * 1000)
+    conn.executemany(
+        "INSERT OR REPLACE INTO counter (relatorio, titulo, editor, isbn, metrica, mes, valor, importado) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [(dados["relatorio"], r["titulo"], r["editor"], r["isbn"], r["metrica"], r["mes"], r["valor"], agora)
+         for r in dados["registos"]])
+    conn.commit()
+    meses = sorted({r["mes"] for r in dados["registos"]})
+    return {"relatorio": dados["relatorio"], "registos": len(dados["registos"]),
+            "titulos": len({(r["titulo"], r["isbn"]) for r in dados["registos"]}),
+            "meses": [meses[0], meses[-1]] if meses else []}
+
+
+def metricas_counter(conn: sqlite3.Connection, d_ini: date, d_fim: date, limite: int = 10) -> dict:
+    """Resumo dos relatórios COUNTER importados para os meses que tocam o intervalo."""
+    conn.executescript(ESQUEMA_COUNTER)
+    m_ini, m_fim = d_ini.strftime("%Y-%m"), d_fim.strftime("%Y-%m")
+    geral = conn.execute("SELECT MIN(mes), MAX(mes), COUNT(*) FROM counter").fetchone()
+    if not geral[2]:
+        return {"disponivel": False}
+    p = {"a": m_ini, "b": m_fim, "lim": limite}
+    # TR_B1 tem as duas métricas; outros relatórios podem ter só uma
+    pivo = """SUM(CASE WHEN metrica = 'Unique_Title_Requests' THEN valor ELSE 0 END) AS unicos,
+              SUM(CASE WHEN metrica = 'Total_Item_Requests' THEN valor ELSE 0 END) AS total,
+              SUM(CASE WHEN metrica IN ('No_License', 'Limit_Exceeded') THEN valor ELSE 0 END) AS recusados"""
+    titulos = [dict(r) for r in conn.execute(f"""
+        SELECT titulo, MAX(editor) AS editor, MAX(isbn) AS isbn, {pivo}
+        FROM counter WHERE mes BETWEEN :a AND :b GROUP BY titulo, isbn
+        ORDER BY unicos DESC, total DESC, titulo LIMIT :lim""", p)]
+    meses = [dict(r) for r in conn.execute(f"""
+        SELECT mes AS periodo, {pivo}, COUNT(DISTINCT titulo) AS titulos
+        FROM counter WHERE mes BETWEEN :a AND :b GROUP BY mes ORDER BY mes""", p)]
+    return {"disponivel": True, "meses_importados": [geral[0], geral[1]],
+            "mais_lidos": titulos, "por_mes": meses,
+            "total_unicos": sum(m["unicos"] for m in meses), "total_pedidos": sum(m["total"] for m in meses)}

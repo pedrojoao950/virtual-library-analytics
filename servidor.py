@@ -30,6 +30,7 @@ import analytics
 PASTA_ESTATICA = Path(__file__).resolve().parent / "static"
 MAX_CORPO = 256 * 1024
 MAX_EVENTOS_POR_PEDIDO = 500
+MAX_RELATORIO = 30 * 1024 * 1024
 
 FICHEIROS = {
     "/": ("painel.html", "text/html; charset=utf-8", True),
@@ -174,7 +175,31 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json(HTTPStatus.NOT_FOUND, {"erro": "não encontrado"})
 
+    def _importar_counter(self):
+        url = urlparse(self.path)
+        if not self._autorizado(parse_qs(url.query)):
+            return self._json(HTTPStatus.UNAUTHORIZED, {"erro": "token em falta ou inválido"})
+        try:
+            tamanho = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            tamanho = -1
+        if tamanho <= 0 or tamanho > MAX_RELATORIO:
+            return self._json(HTTPStatus.BAD_REQUEST, {"erro": "ficheiro vazio ou maior que 30 MB"})
+        conteudo = self.rfile.read(tamanho)
+        conn = analytics.ligar(Config.bd)
+        try:
+            res = analytics.importar_counter(conn, conteudo)
+        except (ValueError, KeyError, IndexError) as erro:
+            return self._json(HTTPStatus.BAD_REQUEST, {"erro": str(erro)})
+        except Exception as erro:  # ficheiro corrompido (zip/xml inválido, etc.)
+            return self._json(HTTPStatus.BAD_REQUEST, {"erro": f"não foi possível ler o ficheiro: {erro}"})
+        finally:
+            conn.close()
+        return self._json(HTTPStatus.OK, res)
+
     def do_POST(self):
+        if urlparse(self.path).path == "/api/importar-counter":
+            return self._importar_counter()
         if urlparse(self.path).path != "/api/eventos":
             return self._json(HTTPStatus.NOT_FOUND, {"erro": "não encontrado"})
         try:

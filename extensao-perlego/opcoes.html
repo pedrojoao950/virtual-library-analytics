@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<title>Biblioteca Analytics — opções</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; max-width:640px; margin:24px auto; padding:0 16px; }
+  label { display:block; margin:14px 0 4px; font-weight:600; }
+  input[type=text], input[type=url] { width:100%; box-sizing:border-box; padding:8px; font:inherit; border:1px solid #c2c2c2; border-radius:6px; }
+  .ajuda { color:#666; font-size:13px; margin:2px 0 0; }
+  button { margin-top:18px; padding:8px 16px; font:inherit; border:0; border-radius:6px; background:#257de0; color:#fff; cursor:pointer; }
+  #estado { margin-top:12px; white-space:pre-line; }
+  details { margin-top:18px; }
+  .gerido { color:#b35c00; font-size:13px; }
+</style>
+</head>
+<body>
+<h1>Biblioteca Analytics — Perlego</h1>
+<p class="ajuda">Configuração deste computador. Os campos bloqueados foram definidos pelo administrador (política do navegador).</p>
+
+<label for="servidor">Endereço do servidor de métricas</label>
+<input type="url" id="servidor" placeholder="http://192.168.1.10:8080">
+
+<label for="posto">Nome deste computador</label>
+<input type="text" id="posto" placeholder="PC-01" maxlength="80">
+<p class="ajuda">Deixe vazio se o servidor identifica os computadores pelo IP (postos.json).</p>
+
+<label><input type="checkbox" id="diagnostico"> Modo diagnóstico</label>
+<p class="ajuda">Mostra no canto da página da Perlego o que a extensão deteta (pesquisas, nº de resultados, livros, leitura). Útil para confirmar que tudo funciona; desligue depois.</p>
+
+<details>
+  <summary>Endereços da Perlego (avançado)</summary>
+  <p class="ajuda">Expressões regulares aplicadas ao endereço da página. Só precisa de mudar se a Perlego alterar o site.</p>
+  <label for="regexPesquisa">Página de resultados de pesquisa</label><input type="text" id="regexPesquisa">
+  <label for="regexLivro">Página de um livro (o 1.º grupo é o id do livro)</label><input type="text" id="regexLivro">
+  <label for="regexLeitor">Leitor (quando o livro está aberto para leitura)</label><input type="text" id="regexLeitor">
+</details>
+
+<button id="guardar">Guardar</button>
+<div id="estado" role="status"></div>
+<script src="config.js"></script>
+<script src="opcoes.js"></script>
+</body>
+</html>

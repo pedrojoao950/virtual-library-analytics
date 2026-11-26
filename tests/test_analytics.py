@@ -4,6 +4,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
@@ -155,6 +156,76 @@ class TestMetricas(unittest.TestCase):
         self.assertIn("Mayombe", txt)
 
 
+CABECALHO_COUNTER = [
+    ["Report_Name", "Book Requests (Controlled)"], ["Report_ID", "TR_B1"], ["Release", "5.1"],
+    ["Institution_Name", "Universidade X"], ["Metric_Types", "Total_Item_Requests; Unique_Title_Requests"],
+    ["Reporting_Period", "Begin_Date=2026-09-01; End_Date=2026-10-31"], [],
+    ["Title", "Publisher", "Publisher_ID", "Platform", "DOI", "Proprietary_ID", "ISBN", "Print_ISSN", "Online_ISSN",
+     "URI", "YOP", "Metric_Type", "Reporting_Period_Total", "Sep-2026", "Oct-2026"],
+    ["Mayombe", "Ed. A", "", "Perlego", "", "123", "978-1", "", "", "", "1980", "Total_Item_Requests", "30", "10", "20"],
+    ["Mayombe", "Ed. A", "", "Perlego", "", "123", "978-1", "", "", "", "1980", "Unique_Title_Requests", "12", "5", "7"],
+    ["Luuanda", "Ed. B", "", "Perlego", "", "456", "978-2", "", "", "", "1963", "Unique_Title_Requests", "4", "", "4"],
+]
+
+
+def _xlsx(linhas):
+    import io
+    import zipfile
+    from xml.sax.saxutils import escape
+    folha = "".join(
+        "<row>" + "".join(f'<c r="{chr(65 + j)}{i + 1}" t="inlineStr"><is><t>{escape(v)}</t></is></c>'
+                          for j, v in enumerate(linha) if v) + "</row>"
+        for i, linha in enumerate(linhas))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("xl/worksheets/sheet1.xml",
+                   '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                   f"<sheetData>{folha}</sheetData></worksheet>")
+    return buf.getvalue()
+
+
+class TestCounter(unittest.TestCase):
+    def setUp(self):
+        self.conn = analytics.ligar(":memory:")
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _verificar(self, conteudo):
+        r = analytics.importar_counter(self.conn, conteudo)
+        self.assertEqual(r["relatorio"], "TR_B1")
+        self.assertEqual(r["titulos"], 2)
+        self.assertEqual(r["meses"], ["2026-09", "2026-10"])
+        c = analytics.metricas_counter(self.conn, date(2026, 9, 1), date(2026, 10, 31))
+        self.assertTrue(c["disponivel"])
+        self.assertEqual(c["mais_lidos"][0]["titulo"], "Mayombe")
+        self.assertEqual(c["mais_lidos"][0]["unicos"], 12)
+        self.assertEqual(c["mais_lidos"][0]["total"], 30)
+        self.assertEqual([m["unicos"] for m in c["por_mes"]], [5, 11])
+        # só outubro
+        c = analytics.metricas_counter(self.conn, date(2026, 10, 5), date(2026, 10, 20))
+        self.assertEqual(c["total_unicos"], 11)
+
+    def test_csv_tsv_xlsx(self):
+        import csv
+        import io
+        for sep in (",", "\t", ";"):
+            buf = io.StringIO()
+            csv.writer(buf, delimiter=sep).writerows(CABECALHO_COUNTER)
+            self._verificar(buf.getvalue().encode("utf-8"))
+        self._verificar(_xlsx(CABECALHO_COUNTER))
+        # reimportar não duplica
+        analytics.importar_counter(self.conn, _xlsx(CABECALHO_COUNTER))
+        c = analytics.metricas_counter(self.conn, date(2026, 9, 1), date(2026, 10, 31))
+        self.assertEqual(c["total_unicos"], 16)
+
+    def test_invalido(self):
+        with self.assertRaises(ValueError):
+            analytics.importar_counter(self.conn, b"a,b,c\n1,2,3\n")
+        self.assertFalse(analytics.metricas_counter(self.conn, date(2026, 1, 1), date(2026, 2, 1))["disponivel"])
+
+
 class TestServidor(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -197,6 +268,12 @@ class TestServidor(unittest.TestCase):
             d = json.load(r)
         self.assertTrue(d["computadores"][0]["ativo_agora"])
         self.assertEqual(d["resumo"]["pesquisas"], 0)
+        req = urllib.request.Request(self.url + "/api/importar-counter", data=_xlsx(CABECALHO_COUNTER))
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(json.load(r)["titulos"], 2)
+        with self.assertRaises(urllib.error.HTTPError) as erro:
+            urllib.request.urlopen(urllib.request.Request(self.url + "/api/importar-counter", data=b"lixo"))
+        self.assertEqual(erro.exception.code, 400)
         for p in ("/", "/tracker.js", "/demo"):
             with urllib.request.urlopen(self.url + p) as r:
                 self.assertEqual(r.status, 200)
