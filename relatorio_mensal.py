@@ -287,7 +287,8 @@ def gerar_pdf(dados: dict, anterior: dict, titulo_mes: str, instituicao: str = "
 
     hist.append(tabela("Livros mais lidos", "Por tempo total de leitura ativa.",
                        ["Livro", "Minutos", "Leitores"],
-                       [[x["titulo"] or x["livro_id"], num(x["minutos"], 1), x["leitores"]] for x in dados["mais_lidos"]],
+                       [[(x["titulo"] or f"Livro {x['livro_id']}") + (f" — {x['autor']}" if x.get("autor") else ""),
+                         num(x["minutos"], 1), x["leitores"]] for x in dados["mais_lidos"]],
                        [0.7, 0.15, 0.15]))
     hist.append(tabela("Termos mais pesquisados", "Sucesso = a pesquisa levou a abrir um livro.",
                        ["Termo", "Pesquisas", "Sucesso"],

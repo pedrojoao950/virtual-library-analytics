@@ -99,6 +99,28 @@ política ficam bloqueados na página de opções.
 Limites: só regista o uso no Chrome/Edge com a extensão; não vê a app da Perlego, telemóveis nem
 acessos de casa (para isso servem os relatórios COUNTER).
 
+#### Como são identificados os nomes dos livros
+
+A extensão procura o título por esta ordem e fica com o da fonte mais fiável:
+
+1. **dados estruturados** da página do livro (schema.org `Book`, também dão autor e ISBN);
+2. **`og:title`** (título para partilha nas redes sociais);
+3. **título do separador** do navegador;
+4. **cabeçalho, capa (`alt` da imagem) ou atributos** do link no resultado da pesquisa;
+5. **texto do link**;
+6. em último caso, o **endereço** (`/book/123/o-vendedor-de-passados-pdf` → "O vendedor de passados", sem acentos).
+
+Os títulos são limpos de "| Perlego", "[PDF]", "ePub", "Read online", "by Autor", e textos
+genéricos ("Read now", "Chapter 3", "Perlego") são ignorados — por isso o capítulo que aparece no
+leitor nunca passa por título do livro. A extensão lembra os títulos vistos nos resultados da
+pesquisa e usa-os no leitor.
+
+No servidor há um **catálogo** com o melhor título de cada livro: um título de fonte melhor
+substitui um pior, nunca o contrário. Se um título continuar errado, clique no **✎** ao lado dele
+no painel (tabelas *Livros mais lidos* e *Livros mais procurados*) e escreva o título e o autor
+corretos; a correção manual nunca é substituída automaticamente. Os dados antigos são
+aproveitados: ao atualizar, o catálogo é criado com o título limpo mais frequente de cada livro.
+
 ### 2. Relatórios oficiais COUNTER da Perlego
 
 Quem tem conta de **administrador** da instituição na Perlego descarrega os relatórios em

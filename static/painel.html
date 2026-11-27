@@ -68,6 +68,11 @@
   th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--grid); vertical-align:middle; }
   th { color:var(--ink2); font-weight:600; font-size:12px; }
   td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .livro-linha { display:flex; align-items:baseline; gap:6px; }
+  .livro-autor { color:var(--ink2); font-size:12px; }
+  .editar { border:0; background:none; color:var(--ink2); cursor:pointer; font-size:13px; padding:0 2px; border-radius:4px; opacity:.55; }
+  tr:hover .editar, .editar:focus { opacity:1; color:var(--s1); }
+  .sem-titulo { color:var(--ink2); font-style:italic; }
   .barra { height:6px; border-radius:0 3px 3px 0; background:var(--s1); margin-top:4px; min-width:2px; }
   .cab { display:flex; justify-content:space-between; gap:8px; align-items:baseline; flex-wrap:wrap; }
   .cab a { font-size:13px; color:var(--s1); text-decoration:none; }
@@ -329,6 +334,7 @@ function tabela(alvo, linhas, colunasDef, { barra, aoClicar } = {}) {
       td.textContent = c.f ? c.f(r[c.chave], r) : (r[c.chave] ?? "—");
       if (c.num) td.className = "n";
       if (c.classe) td.classList.add(...c.classe(r).split(" ").filter(Boolean));
+      if (c.render) c.render(td, r);
       if (barra && ci === 0) { const b = document.createElement("div"); b.className = "barra"; b.style.width = (100 * (r[barra] || 0) / max) + "%"; td.append(b); }
     });
   }
@@ -389,6 +395,33 @@ function desenharCounter(c) {
   tabela($("t-counter"), c.mais_lidos, [{ nome: "Título", chave: "titulo" }, { nome: "Aberturas", chave: "unicos", num: 1 }, { nome: "Pedidos totais", chave: "total", num: 1 }], { barra: "unicos" });
   $("counter-meses").textContent = `Meses do período com dados: ${rotuloPeriodo(c.por_mes[0].periodo)} – ${rotuloPeriodo(c.por_mes[c.por_mes.length - 1].periodo)} · ${fmt(c.total_unicos)} aberturas`;
 }
+// célula "Livro": título, autor e botão para corrigir o título à mão
+function celulaLivro(td, r) {
+  td.replaceChildren();
+  const linha = document.createElement("div"); linha.className = "livro-linha";
+  const t = document.createElement("span");
+  t.textContent = r.titulo || `Livro ${r.livro_id} (título desconhecido)`;
+  if (!r.titulo) t.className = "sem-titulo";
+  const b = document.createElement("button");
+  b.className = "editar"; b.type = "button"; b.textContent = "✎";
+  b.title = "Corrigir o título"; b.setAttribute("aria-label", `Corrigir o título de ${t.textContent}`);
+  b.addEventListener("click", (e) => { e.stopPropagation(); corrigirLivro(r); });
+  linha.append(t, b); td.append(linha);
+  if (r.autor) { const a = document.createElement("div"); a.className = "livro-autor"; a.textContent = r.autor; td.append(a); }
+}
+async function corrigirLivro(r) {
+  const titulo = prompt(`Título correto do livro (id Perlego ${r.livro_id}):`, r.titulo || "");
+  if (titulo === null || !titulo.trim()) return;
+  const autor = prompt("Autor (opcional):", r.autor || "");
+  if (autor === null) return;
+  try {
+    const p = new URLSearchParams(); if (token) p.set("token", token);
+    const resp = await fetch("/api/livros?" + p, { method: "POST", body: JSON.stringify({ livro_id: r.livro_id, titulo: titulo.trim(), autor: autor.trim() }) });
+    const j = await resp.json();
+    if (!resp.ok) throw new Error(j.erro || resp.status);
+    carregar();
+  } catch (e) { alert("Não foi possível guardar: " + e.message); }
+}
 function desenhar() {
   if (!dados) return;
   desenharCounter(dados.perlego_counter);
@@ -421,9 +454,9 @@ function desenhar() {
   tabela($("t-tempo"), s, [per, { nome: "Segundos", chave: "tempo_medio_pesquisa_s", num: 1, f: (v) => fmt(v, 1) }, { nome: "Sessões", chave: "sessoes", num: 1 }]);
   tabela($("t-hora"), dados.por_hora, [{ nome: "Hora", chave: "hora", f: (h) => `${h}:00` }, { nome: "Pesquisas", chave: "pesquisas", num: 1 }, { nome: "Min. leitura", chave: "minutos_leitura", num: 1, f: (v) => fmt(v, 1) }]);
 
-  tabela($("t-lidos"), dados.mais_lidos, [{ nome: "Livro", chave: "titulo", f: (v, r) => v || r.livro_id }, { nome: "Minutos", chave: "minutos", num: 1, f: (v) => fmt(v, 1) }, { nome: "Leitores", chave: "leitores", num: 1 }], { barra: "minutos" });
+  tabela($("t-lidos"), dados.mais_lidos, [{ nome: "Livro", chave: "titulo", render: celulaLivro }, { nome: "Minutos", chave: "minutos", num: 1, f: (v) => fmt(v, 1) }, { nome: "Leitores", chave: "leitores", num: 1 }], { barra: "minutos" });
   const procurados = dados.mais_procurados_livros.map((r) => ({ ...r, total: r.vistas + r.cliques_pesquisa }));
-  tabela($("t-procurados"), procurados, [{ nome: "Livro", chave: "titulo", f: (v, r) => v || r.livro_id }, { nome: "Fichas abertas", chave: "vistas", num: 1 }, { nome: "Cliques na pesquisa", chave: "cliques_pesquisa", num: 1 }, { nome: "Utilizadores", chave: "utilizadores", num: 1 }], { barra: "total" });
+  tabela($("t-procurados"), procurados, [{ nome: "Livro", chave: "titulo", render: celulaLivro }, { nome: "Fichas abertas", chave: "vistas", num: 1 }, { nome: "Cliques na pesquisa", chave: "cliques_pesquisa", num: 1 }, { nome: "Utilizadores", chave: "utilizadores", num: 1 }], { barra: "total" });
   tabela($("t-termos"), dados.mais_procurados_termos, [{ nome: "Termo", chave: "termo" }, { nome: "Pesquisas", chave: "pesquisas", num: 1 }, { nome: "Sucesso", chave: "taxa_sucesso", num: 1, f: (v) => fmt(v, 1) + "%" }, { nome: "Resultados (média)", chave: "resultados_medios", num: 1, f: (v) => fmt(v, 1) }], { barra: "pesquisas" });
   tabela($("t-nao"), dados.nao_encontrados, [{ nome: "Termo / título", chave: "termo" }, { nome: "Vezes", chave: "vezes", num: 1 }, { nome: "Pedidos", chave: "pedidos_explicitos", num: 1 }, { nome: "Última vez", chave: "ultima_vez", num: 1 }], { barra: "vezes" });
 }

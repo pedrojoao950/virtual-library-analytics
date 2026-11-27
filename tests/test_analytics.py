@@ -152,7 +152,7 @@ class TestMetricas(unittest.TestCase):
 
     def test_csv(self):
         txt = analytics.para_csv(self.m(), "mais_lidos")
-        self.assertTrue(txt.startswith("livro_id;titulo;minutos"))
+        self.assertTrue(txt.startswith("livro_id;titulo;autor;isbn;minutos"))
         self.assertIn("Mayombe", txt)
 
 
@@ -224,6 +224,72 @@ class TestCounter(unittest.TestCase):
         with self.assertRaises(ValueError):
             analytics.importar_counter(self.conn, b"a,b,c\n1,2,3\n")
         self.assertFalse(analytics.metricas_counter(self.conn, date(2026, 1, 1), date(2026, 2, 1))["disponivel"])
+
+
+class TestTitulos(unittest.TestCase):
+    def setUp(self):
+        self.conn = analytics.ligar(":memory:")
+        self.agora = ms(HOJE, 12)
+
+    def tearDown(self):
+        self.conn.close()
+
+    def ev(self, tipo, titulo, q=None, **k):
+        e = {"tipo": tipo, "sessao": "s", "ts": self.agora, "livro_id": "42", "livro_titulo": titulo, **k}
+        if q is not None:
+            e["titulo_qualidade"] = q
+        if tipo == "leitura":
+            e["duracao_ms"] = 60000
+        analytics.inserir_eventos(self.conn, [e], agora_ms=self.agora)
+
+    def livro(self):
+        return dict(self.conn.execute("SELECT * FROM livros WHERE livro_id='42'").fetchone())
+
+    def test_limpeza(self):
+        casos = {
+            "Mayombe | Perlego": "Mayombe", "Mayombe [PDF]": "Mayombe", "Mayombe (PDF and ePub) - Read online": "Mayombe",
+            "Perlego": None, "Read now": None, "Chapter 3": None, "Capítulo 12 — A fuga": None, "1984": "1984",
+            "  Sagrada   Esperança  ": "Sagrada Esperança", "“Luuanda”": "Luuanda",
+        }
+        for bruto, esperado in casos.items():
+            self.assertEqual(analytics.limpar_titulo(bruto), esperado, bruto)
+        self.assertEqual(analytics.limpar_titulo("O Vendedor de Passados by J. E. Agualusa", "J. E. Agualusa"),
+                         "O Vendedor de Passados")
+        self.assertEqual(analytics.limpar_isbn("978-972-20-1234-5"), "9789722012345")
+        self.assertIsNone(analytics.limpar_isbn("123"))
+
+    def test_qualidade_e_correcao_manual(self):
+        self.ev("clique_resultado", "Mayombe Pepetela 4,5 ★ Ler", q=1)
+        self.assertEqual(self.livro()["titulo"], "Mayombe Pepetela 4,5 ★ Ler")
+        self.ev("vista_livro", "Mayombe | Perlego", q=5, livro_autor="Pepetela", livro_isbn="9789722012345")
+        self.assertEqual((self.livro()["titulo"], self.livro()["autor"], self.livro()["isbn"]),
+                         ("Mayombe", "Pepetela", "9789722012345"))
+        self.ev("leitura", "Capítulo 1", q=2)        # genérico: ignorado
+        self.ev("leitura", "Mayombe, 1.ª ed.", q=2)  # pior qualidade: não substitui
+        self.assertEqual(self.livro()["titulo"], "Mayombe")
+        r = analytics.corrigir_livro(self.conn, "42", "Mayombe (edição angolana)", "Pepetela")
+        self.assertEqual(r["qualidade"], analytics.QUALIDADE_MANUAL)
+        self.ev("vista_livro", "Outro título", q=5)   # nada substitui a correção manual
+        d = analytics.metricas(self.conn, periodo="hoje", hoje=HOJE, fuso_horas=1, agora_ms=self.agora)
+        self.assertEqual(d["mais_lidos"][0]["titulo"], "Mayombe (edição angolana)")
+        self.assertEqual(d["mais_lidos"][0]["autor"], "Pepetela")
+        self.assertEqual(d["mais_procurados_livros"][0]["titulo"], "Mayombe (edição angolana)")
+        with self.assertRaises(ValueError):
+            analytics.corrigir_livro(self.conn, "42", " ")
+
+    def test_catalogo_criado_a_partir_de_dados_antigos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            caminho = os.path.join(tmp, "antiga.db")
+            import sqlite3
+            c = sqlite3.connect(caminho)
+            c.executescript(analytics.ESQUEMA)
+            c.executemany("INSERT INTO eventos (ts, recebido, tipo, sessao, livro_id, livro_titulo) VALUES (1,1,'vista_livro','s',?,?)",
+                          [("7", "Luuanda | Perlego"), ("7", "Luuanda | Perlego"), ("7", "Luuanda Luandino Vieira")])
+            c.commit()
+            c.close()
+            conn = analytics.ligar(caminho)
+            self.assertEqual(conn.execute("SELECT titulo FROM livros WHERE livro_id='7'").fetchone()[0], "Luuanda")
+            conn.close()
 
 
 class TestServidor(unittest.TestCase):
@@ -324,6 +390,20 @@ class TestServidorProducao(unittest.TestCase):
         self.assertEqual(self._post({"eventos": ev, "chave": "errada"})[0], 401)
         self.assertEqual(self._post({"eventos": ev, "chave": "chave-secreta"}), (200, {"aceites": 1, "rejeitados": 0}))
         self.assertEqual(self._post({"eventos": ev}, "?chave=chave-secreta")[0], 200)
+
+    def test_corrigir_livro(self):
+        self._post({"chave": "chave-secreta", "eventos": [
+            {"tipo": "vista_livro", "sessao": "s", "livro_id": "9", "livro_titulo": "Luandino [PDF]"}]})
+        corpo = json.dumps({"livro_id": "9", "titulo": "Luuanda", "autor": "José Luandino Vieira"}).encode()
+        for sufixo, esperado in (("", 401), ("?token=tok", 200)):
+            req = urllib.request.Request(self.url + "/api/livros" + sufixo, data=corpo)
+            try:
+                with urllib.request.urlopen(req) as r:
+                    codigo, resp = r.status, json.load(r)
+            except urllib.error.HTTPError as e:
+                codigo, resp = e.code, None
+            self.assertEqual(codigo, esperado)
+        self.assertEqual((resp["titulo"], resp["autor"]), ("Luuanda", "José Luandino Vieira"))
 
     def test_painel_e_demo(self):
         self.assertEqual(self._get("/"), 401)

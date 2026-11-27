@@ -60,6 +60,23 @@ CREATE INDEX IF NOT EXISTS idx_eventos_pesquisa ON eventos (pesquisa_id);
 """
 INDICES_POSTO = "CREATE INDEX IF NOT EXISTS idx_eventos_posto_ts ON eventos (posto, ts);"
 
+# Catálogo: o melhor título conhecido de cada livro. A qualidade indica de onde veio o título,
+# para um título melhor substituir um pior, mas nunca o contrário:
+#   9 corrigido à mão no painel   5 dados estruturados da página (JSON-LD)
+#   4 meta og:title               3 título do separador       2 cabeçalho / capa / atributos
+#   1 texto do link               0 deduzido do endereço (sem acentos)
+QUALIDADE_MANUAL = 9
+ESQUEMA_LIVROS = """
+CREATE TABLE IF NOT EXISTS livros (
+    livro_id   TEXT PRIMARY KEY,
+    titulo     TEXT NOT NULL,
+    autor      TEXT,
+    isbn       TEXT,
+    qualidade  INTEGER NOT NULL DEFAULT 0,
+    atualizado INTEGER NOT NULL
+);
+"""
+
 
 # --------------------------------------------------------------------------- BD
 
@@ -74,8 +91,27 @@ def ligar(caminho: str | None = None) -> sqlite3.Connection:
     if "posto" not in {r[1] for r in conn.execute("PRAGMA table_info(eventos)")}:
         conn.execute("ALTER TABLE eventos ADD COLUMN posto TEXT")
     conn.execute(INDICES_POSTO)
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='livros'").fetchone():
+        conn.executescript(ESQUEMA_LIVROS)
+        _preencher_catalogo(conn)
     conn.commit()
     return conn
+
+
+def _preencher_catalogo(conn: sqlite3.Connection) -> None:
+    """Na primeira vez, cria o catálogo a partir dos eventos já gravados
+    (o título limpo mais frequente de cada livro)."""
+    contagem: dict[str, dict[str, int]] = {}
+    for livro_id, titulo, n in conn.execute(
+            "SELECT livro_id, livro_titulo, COUNT(*) FROM eventos WHERE livro_id IS NOT NULL "
+            "AND livro_titulo IS NOT NULL GROUP BY livro_id, livro_titulo"):
+        t = limpar_titulo(titulo)
+        if t:
+            contagem.setdefault(livro_id, {}).setdefault(t, 0)
+            contagem[livro_id][t] += n
+    agora = int(time.time() * 1000)
+    conn.executemany("INSERT OR IGNORE INTO livros (livro_id, titulo, qualidade, atualizado) VALUES (?, ?, 1, ?)",
+                     [(i, max(ts, key=ts.get), agora) for i, ts in contagem.items()])
 
 
 # ------------------------------------------------------------------- validação
@@ -85,6 +121,50 @@ def normalizar_termo(termo: str) -> str:
     sem_acentos = unicodedata.normalize("NFKD", termo)
     sem_acentos = "".join(c for c in sem_acentos if not unicodedata.combining(c))
     return " ".join(sem_acentos.lower().split())
+
+
+_GENERICOS = {"perlego", "search", "pesquisa", "reader", "leitor", "home", "início", "inicio", "loading",
+              "loading...", "a carregar", "read", "read now", "ler", "ler agora", "start reading", "continue reading",
+              "book", "livro", "ebook", "pdf", "epub", "untitled", "sem título", "contents", "índice",
+              "table of contents", "cover", "capa", "my library", "a minha biblioteca"}
+
+
+def limpar_titulo(titulo, autor: str | None = None) -> str | None:
+    """Tira do título o que não é título: '| Perlego', '[PDF]', 'Read online', 'by Autor',
+    espaços repetidos. Devolve None para textos genéricos ('Perlego', 'Read now', 'Chapter 3'…)."""
+    import re
+    if not titulo:
+        return None
+    t = " ".join(str(titulo).replace("\u00a0", " ").split())
+    t = re.sub(r"\s*[|–—-]\s*Perlego\b.*$", "", t, flags=re.I)
+    t = re.sub(r"^Perlego\s*[|–—:-]\s*", "", t, flags=re.I)
+    formato = r"(?:pdf|epub|e-?book|kindle|mobi)"
+    for _ in range(3):  # sufixos podem vir encadeados: "Mayombe [PDF] - Read online"
+        antes = t
+        t = re.sub(r"\s*[-–—|:]?\s*(?:read|ler|leia)\s+(?:online|now|agora|free|grátis)\b.*$", "", t, flags=re.I)
+        t = re.sub(rf"\s*[-–—|:]?\s*[\[(]?\s*{formato}(?:\s*(?:and|&|e|/|,)\s*{formato})*\s*[\])]?\s*$", "", t, flags=re.I)
+        t = re.sub(r"\s*[-–—|:]\s*$", "", t)
+        if t == antes:
+            break
+    if autor:
+        t = re.sub(rf"\s+(?:by|de|por|-|–|—)\s+{re.escape(autor.strip())}\s*$", "", t, flags=re.I)
+    t = t.strip(" \"'“”‘’«»")
+    if len(t) < 2 or t.lower() in _GENERICOS:
+        return None
+    if re.fullmatch(r"(?:chapter|cap[ií]tulo|part|parte|section|secção|page|página)\s*[\divxlc.]+.*", t, flags=re.I) \
+            and len(t) < 40:
+        return None
+    if re.fullmatch(r"[\W_]+", t):  # só símbolos
+        return None
+    return t[:MAX_TEXTO]
+
+
+def limpar_isbn(valor) -> str | None:
+    import re
+    if not valor:
+        return None
+    digitos = re.sub(r"[^0-9Xx]", "", str(valor)).upper()
+    return digitos if len(digitos) in (10, 13) else None
 
 
 def _texto(valor, limite=MAX_TEXTO):
@@ -135,11 +215,19 @@ def validar_evento(bruto: dict, agora_ms: int | None = None) -> dict | None:
         "num_resultados": _inteiro(bruto.get("num_resultados"), 0),
         "pesquisa_id": _texto(bruto.get("pesquisa_id"), 80),
         "livro_id": _texto(bruto.get("livro_id"), 120),
-        "livro_titulo": _texto(bruto.get("livro_titulo")),
+        "livro_titulo": None,
         "posicao": _inteiro(bruto.get("posicao"), 1, 10_000),
         "duracao_ms": None,
         "posto": _texto(bruto.get("posto"), 80),
+        # só para o catálogo de livros (não ficam na tabela de eventos)
+        "livro_autor": _texto(bruto.get("livro_autor"), 200),
+        "livro_isbn": limpar_isbn(bruto.get("livro_isbn")),
+        "titulo_qualidade": _inteiro(bruto.get("titulo_qualidade"), 0, 5),
     }
+    ev["livro_titulo"] = (limpar_titulo(bruto.get("livro_titulo"), ev["livro_autor"]) if tipo != "nao_encontrado"
+                          else _texto(bruto.get("livro_titulo")))
+    if ev["titulo_qualidade"] is None:
+        ev["titulo_qualidade"] = 1
     teto = {"leitura": MAX_LEITURA_BLOCO_MS, "presenca": MAX_PRESENCA_MS}.get(tipo, MAX_DURACAO_PESQUISA_MS)
     ev["duracao_ms"] = _inteiro(bruto.get("duracao_ms"), 0, teto)
 
@@ -173,8 +261,46 @@ def inserir_eventos(conn: sqlite3.Connection, brutos, agora_ms: int | None = Non
             f"VALUES ({', '.join('?' * len(COLUNAS))})",
             [tuple(e[c] for c in COLUNAS) for e in validos],
         )
+        for e in validos:
+            if e["livro_id"] and e["livro_titulo"] and e["tipo"] != "nao_encontrado":
+                atualizar_livro(conn, e["livro_id"], e["livro_titulo"], e["livro_autor"], e["livro_isbn"],
+                                e["titulo_qualidade"], commit=False)
         conn.commit()
     return len(validos)
+
+
+def atualizar_livro(conn: sqlite3.Connection, livro_id: str, titulo: str, autor: str | None = None,
+                    isbn: str | None = None, qualidade: int = 1, commit: bool = True) -> None:
+    """Guarda o título no catálogo se for melhor (ou igual e mais recente) do que o conhecido.
+    Autor e ISBN preenchem-se sempre que ainda faltem. Um título corrigido à mão nunca é substituído
+    automaticamente."""
+    agora = int(time.time() * 1000)
+    conn.execute("""
+        INSERT INTO livros (livro_id, titulo, autor, isbn, qualidade, atualizado) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(livro_id) DO UPDATE SET
+            titulo = CASE WHEN excluded.qualidade >= livros.qualidade
+                           AND (livros.qualidade < 9 OR excluded.qualidade >= 9)
+                          THEN excluded.titulo ELSE livros.titulo END,
+            qualidade = MAX(livros.qualidade, excluded.qualidade),
+            autor = CASE WHEN excluded.qualidade >= 9 THEN COALESCE(excluded.autor, livros.autor)
+                         ELSE COALESCE(livros.autor, excluded.autor) END,
+            isbn = COALESCE(livros.isbn, excluded.isbn),
+            atualizado = excluded.atualizado""",
+                 (livro_id, titulo, autor, isbn, qualidade, agora))
+    if commit:
+        conn.commit()
+
+
+def corrigir_livro(conn: sqlite3.Connection, livro_id: str, titulo: str, autor: str | None = None) -> dict:
+    """Correção manual feita no painel: passa a valer sobre qualquer título detetado."""
+    livro_id = _texto(livro_id, 120)
+    t = " ".join(str(titulo or "").split())[:MAX_TEXTO]
+    if not livro_id or len(t) < 2:
+        raise ValueError("indique o livro e um título com pelo menos 2 caracteres")
+    a = _texto(autor, 200)
+    conn.execute("UPDATE livros SET qualidade = 0 WHERE livro_id = ?", (livro_id,))  # permite reescrever
+    atualizar_livro(conn, livro_id, t, a, None, QUALIDADE_MANUAL)
+    return dict(conn.execute("SELECT * FROM livros WHERE livro_id = ?", (livro_id,)).fetchone())
 
 
 # --------------------------------------------------------------------- períodos
@@ -343,20 +469,24 @@ def metricas(conn: sqlite3.Connection, periodo: str = "30d", inicio: str | None 
         FROM p GROUP BY termo_norm ORDER BY pesquisas DESC, termo LIMIT :lim""")
 
     livros_procurados = todos(f"""
-        SELECT livro_id, MAX(livro_titulo) AS titulo,
-               SUM(tipo = 'vista_livro') AS vistas,
-               SUM(tipo = 'clique_resultado') AS cliques_pesquisa,
-               COUNT(DISTINCT COALESCE(utilizador, sessao)) AS utilizadores
-        FROM eventos WHERE tipo IN ('vista_livro', 'clique_resultado') AND {janela}
-        GROUP BY livro_id ORDER BY vistas + cliques_pesquisa DESC, titulo LIMIT :lim""")
+        SELECT e.livro_id, COALESCE(MAX(l.titulo), MAX(e.livro_titulo)) AS titulo,
+               MAX(l.autor) AS autor, MAX(l.isbn) AS isbn,
+               SUM(e.tipo = 'vista_livro') AS vistas,
+               SUM(e.tipo = 'clique_resultado') AS cliques_pesquisa,
+               COUNT(DISTINCT COALESCE(e.utilizador, e.sessao)) AS utilizadores
+        FROM eventos e LEFT JOIN livros l ON l.livro_id = e.livro_id
+        WHERE e.tipo IN ('vista_livro', 'clique_resultado') AND e.{janela.replace(" AND ", " AND e.")}
+        GROUP BY e.livro_id ORDER BY vistas + cliques_pesquisa DESC, titulo LIMIT :lim""")
 
     mais_lidos = todos(f"""
-        SELECT livro_id, MAX(livro_titulo) AS titulo,
-               ROUND(SUM(duracao_ms) / 60000.0, 1) AS minutos,
-               COUNT(DISTINCT COALESCE(utilizador, sessao)) AS leitores,
-               COUNT(DISTINCT sessao) AS sessoes_leitura
-        FROM eventos WHERE tipo = 'leitura' AND {janela}
-        GROUP BY livro_id ORDER BY minutos DESC, titulo LIMIT :lim""")
+        SELECT e.livro_id, COALESCE(MAX(l.titulo), MAX(e.livro_titulo)) AS titulo,
+               MAX(l.autor) AS autor, MAX(l.isbn) AS isbn,
+               ROUND(SUM(e.duracao_ms) / 60000.0, 1) AS minutos,
+               COUNT(DISTINCT COALESCE(e.utilizador, e.sessao)) AS leitores,
+               COUNT(DISTINCT e.sessao) AS sessoes_leitura
+        FROM eventos e LEFT JOIN livros l ON l.livro_id = e.livro_id
+        WHERE e.tipo = 'leitura' AND e.{janela.replace(" AND ", " AND e.")}
+        GROUP BY e.livro_id ORDER BY minutos DESC, titulo LIMIT :lim""")
 
     nao_encontrados = todos(f"""
         SELECT MIN(COALESCE(termo, livro_titulo)) AS termo, COUNT(*) AS vezes,

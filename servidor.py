@@ -202,7 +202,29 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
         return self._json(HTTPStatus.OK, res)
 
+    def _corrigir_livro(self):
+        url = urlparse(self.path)
+        if not self._autorizado(parse_qs(url.query)):
+            return self._json(HTTPStatus.UNAUTHORIZED, {"erro": "token em falta ou inválido"})
+        try:
+            tamanho = int(self.headers.get("Content-Length", "0"))
+            if not 0 < tamanho <= 4096:
+                raise ValueError("pedido inválido")
+            dados = json.loads(self.rfile.read(tamanho).decode("utf-8"))
+            if not isinstance(dados, dict):
+                raise ValueError("pedido inválido")
+            conn = analytics.ligar(Config.bd)
+            try:
+                livro = analytics.corrigir_livro(conn, dados.get("livro_id"), dados.get("titulo"), dados.get("autor"))
+            finally:
+                conn.close()
+        except (ValueError, UnicodeDecodeError) as erro:
+            return self._json(HTTPStatus.BAD_REQUEST, {"erro": str(erro)})
+        return self._json(HTTPStatus.OK, livro)
+
     def do_POST(self):
+        if urlparse(self.path).path == "/api/livros":
+            return self._corrigir_livro()
         if urlparse(self.path).path == "/api/importar-counter":
             return self._importar_counter()
         if urlparse(self.path).path != "/api/eventos":
