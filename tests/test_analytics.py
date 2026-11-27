@@ -382,7 +382,7 @@ class TestRelatorioMensal(unittest.TestCase):
         srv = ThreadingHTTPServer(("127.0.0.1", 0), Brevo)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.rm.BREVO_URL = f"http://127.0.0.1:{srv.server_address[1]}/v3/smtp/email"
-        env = {"BIBLIO_EMAIL_PARA": "a@x.ao, b@x.ao", "BIBLIO_EMAIL_DE": "biblioteca@x.ao", "BIBLIO_BREVO_CHAVE": "k1"}
+        env = {"BIBLIO_EMAIL_PARA": "a@x.ao, b@x.ao", "BIBLIO_EMAIL_DE": "biblioteca@x.ao", "BIBLIO_BREVO_CHAVE": "xkeysib-" + "c" * 64 + "-k1"}
         antigo = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:
@@ -396,7 +396,7 @@ class TestRelatorioMensal(unittest.TestCase):
             srv.shutdown()
             srv.server_close()
         self.assertIn("Brevo", txt)
-        self.assertEqual(recebido["chave"], "k1")
+        self.assertEqual(recebido["chave"], "xkeysib-" + "c" * 64 + "-k1")
         self.assertEqual([t["email"] for t in recebido["corpo"]["to"]], ["a@x.ao", "b@x.ao"])
         import base64
         self.assertTrue(base64.b64decode(recebido["corpo"]["attachment"][0]["content"]).startswith(b"%PDF"))
@@ -406,6 +406,17 @@ class TestRelatorioMensal(unittest.TestCase):
         erro = urllib.error.HTTPError("u", 400, "Bad", {}, io.BytesIO(
             b'{"code":"invalid_parameter","message":"Sender is not valid"}'))
         self.assertIn("confirmado em Brevo", self.rm.explicar_brevo(erro))
+
+    def test_chave_brevo_limpa(self):
+        boa = "xkeysib-" + "a" * 64 + "-" + "B" * 16
+        for bruta, esperado in [(" " + boa + "\u200b\n", boa), ("\ufeff" + boa + "\u00a0", boa)]:
+            os.environ["BIBLIO_BREVO_CHAVE"] = bruta
+            self.assertEqual(self.rm.chave_brevo(), esperado)
+        for ma in ("xsmtpsib-" + "a" * 40, "chave-errada", boa[:30] + "é" + boa[30:]):
+            os.environ["BIBLIO_BREVO_CHAVE"] = ma
+            with self.assertRaises(RuntimeError):
+                self.rm.chave_brevo()
+        os.environ.pop("BIBLIO_BREVO_CHAVE")
 
     def test_sem_configuracao(self):
         with self.assertRaises(RuntimeError):

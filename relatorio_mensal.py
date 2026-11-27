@@ -354,6 +354,27 @@ def corpo_html(dados: dict, anterior: dict, titulo_mes: str, url_painel: str | N
             f"<p style='color:#666;font-size:12px'>Enviado automaticamente pelo servidor de métricas da biblioteca.</p></div>")
 
 
+INVISIVEIS = "\u00a0\u200b\u200c\u200d\u2060\ufeff"
+
+
+def chave_brevo() -> str:
+    """Lê BIBLIO_BREVO_CHAVE, tira espaços e caracteres invisíveis apanhados ao copiar,
+    e confirma que é uma chave de API do Brevo (xkeysib-…)."""
+    import re
+    bruta = os.environ.get("BIBLIO_BREVO_CHAVE", "")
+    chave = "".join(c for c in bruta if not c.isspace() and c not in INVISIVEIS).strip("'\"")
+    if chave.startswith("xsmtpsib-"):
+        raise RuntimeError("a chave configurada é uma chave SMTP (xsmtpsib-…). É precisa a chave de API: "
+                           "Brevo → SMTP & API → separador API Keys → Generate a new API key (começa por xkeysib-)")
+    if not re.fullmatch(r"xkeysib-[A-Za-z0-9-]{20,}", chave):
+        estranhos = sorted({f"U+{ord(c):04X}" for c in chave if not re.match(r"[A-Za-z0-9-]", c)})
+        raise RuntimeError(
+            f"a chave do Brevo não tem o formato esperado (começa por {chave[:8]!r}, {len(chave)} caracteres"
+            + (f", caracteres estranhos: {', '.join(estranhos)}" if estranhos else "")
+            + "). Copie-a outra vez em Brevo → SMTP & API → API Keys e corra configurar-email.sh")
+    return chave
+
+
 def explicar_brevo(erro: urllib.error.HTTPError) -> str:
     """Resposta de erro do Brevo numa linha, com uma dica em português quando a reconhecemos."""
     bruto = erro.read().decode(errors="replace").strip()
@@ -376,6 +397,8 @@ def explicar_brevo(erro: urllib.error.HTTPError) -> str:
     for chave, dica in dicas:
         if chave in baixo:
             return f"{texto} → {dica}"
+    if texto == "(sem mensagem)" and erro.code == 400:
+        return texto + " → pedido rejeitado antes de chegar ao Brevo; normalmente a chave tem caracteres inválidos"
     return texto
 
 
@@ -403,6 +426,13 @@ def verificar_email() -> int:
     (ok if valido.match(de) else mal)(f"remetente {de!r}" + ("" if valido.match(de) else " não parece um e-mail válido"))
 
     chave = os.environ.get("BIBLIO_BREVO_CHAVE", "")
+    if chave:
+        try:
+            chave = chave_brevo()
+            ok(f"chave do Brevo com formato correto ({chave[:8]}…, {len(chave)} caracteres)")
+        except RuntimeError as erro:
+            mal(str(erro))
+            return problemas
     if not chave:
         print("  (envio por SMTP — a verificação do Brevo não se aplica)" if os.environ.get("BIBLIO_SMTP_HOST")
               else "  ✗ falta BIBLIO_BREVO_CHAVE ou BIBLIO_SMTP_HOST")
@@ -460,7 +490,7 @@ def enviar(assunto: str, html_corpo: str, pdf: bytes, nome_pdf: str) -> str:
             "attachment": [{"name": nome_pdf, "content": base64.b64encode(pdf).decode()}],
         }).encode()
         req = urllib.request.Request(BREVO_URL, data=corpo, method="POST", headers={
-            "api-key": os.environ["BIBLIO_BREVO_CHAVE"], "content-type": "application/json", "accept": "application/json"})
+            "api-key": chave_brevo(), "content-type": "application/json", "accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return f"enviado pelo Brevo para {', '.join(para)} (HTTP {resp.status})"
