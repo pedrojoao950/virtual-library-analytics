@@ -21,6 +21,11 @@ async function estado(cfg) {
   try {
     const r = await fetch(cfg.servidor + "/api/saude", { cache: "no-store" });
     ligacao = r.ok ? "✓ servidor contactável" : `✗ servidor respondeu ${r.status}`;
+    if (r.ok) { // testa a chave de recolha com um envio vazio
+      const t = await fetch(cfg.servidor + "/api/eventos", { method: "POST", headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ chave: cfg.chave || undefined, eventos: [] }) });
+      ligacao += t.status === 401 ? "\n✗ chave de recolha errada ou em falta" : t.ok ? "\n✓ chave de recolha aceite" : "";
+    }
   } catch (e) {
     ligacao = "✗ não foi possível contactar o servidor";
   }

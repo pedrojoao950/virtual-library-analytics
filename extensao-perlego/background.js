@@ -42,15 +42,16 @@ async function enviar() {
     if (!fila.length) return;
     const lote = fila.slice(0, 500);
     const r = await fetch(cfg.servidor + "/api/eventos", {
-      method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ eventos: lote }),
+      method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ chave: cfg.chave || undefined, eventos: lote }),
     });
-    if (r.ok || (r.status >= 400 && r.status < 500)) { // 4xx: lote inválido, não adianta repetir
+    // 400/413: lote inválido, não adianta repetir. 401 (chave errada) fica na fila até corrigir as opções.
+    if (r.ok || r.status === 400 || r.status === 413) {
       await serial(async () => {
         const { ba_fila: atual = [] } = await chrome.storage.local.get("ba_fila");
         await chrome.storage.local.set({ ba_fila: atual.slice(lote.length), ba_ultimo_envio: Date.now(), ba_ultimo_erro: "" });
       });
     } else {
-      await chrome.storage.local.set({ ba_ultimo_erro: `HTTP ${r.status}` });
+      await chrome.storage.local.set({ ba_ultimo_erro: r.status === 401 ? "chave de recolha errada (ver opções)" : `HTTP ${r.status}` });
     }
   } catch (e) {
     await chrome.storage.local.set({ ba_ultimo_erro: String(e.message || e) }); // servidor fora do ar: tenta depois

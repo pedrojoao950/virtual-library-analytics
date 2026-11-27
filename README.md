@@ -20,6 +20,7 @@ biblioteca-analytics/
 ├── relatorio.py         # relatório na consola / exportação CSV, sem servidor
 ├── importar_counter.py  # importa relatórios COUNTER (Perlego) em XLSX/CSV/TSV
 ├── extensao-perlego/    # extensão Chrome/Edge para os computadores da biblioteca
+├── instalacao/          # instalador para servidor Ubuntu/Debian (HTTPS, serviço, cópias)
 ├── gerar_dados_demo.py  # dados fictícios para experimentar
 ├── static/
 │   ├── tracker.js       # script a incluir nas páginas da biblioteca
@@ -27,6 +28,12 @@ biblioteca-analytics/
 │   └── demo.html        # biblioteca de demonstração
 └── tests/
 ```
+
+## Instalar num servidor na internet (produção)
+
+Para os computadores da biblioteca e o seu PC estarem em redes diferentes, siga o
+**[guia de instalação](instalacao/GUIA-INSTALACAO.md)**: um comando instala tudo num servidor
+Ubuntu/Debian, com HTTPS, arranque automático, chaves de acesso e cópias de segurança diárias.
 
 ## Experimentar em 1 minuto
 
@@ -216,6 +223,8 @@ No painel, cada tabela tem um botão **Exportar CSV**. API: `GET /api/metricas?p
 | `BIBLIO_FUSO` | `1` | fuso horário (horas) para separar dias — Angola = UTC+1 |
 | `BIBLIO_POSTOS` | `postos.json` | lista IP → nome dos computadores |
 | `BIBLIO_CONFIAR_PROXY` | — | `1` para ler o IP do cabeçalho `X-Forwarded-For` |
+| `BIBLIO_CHAVE_RECOLHA` | — | se definida, só aceita eventos com esta chave (opções da extensão, ou `data-chave` no `tracker.js`) |
+| `BIBLIO_DEMO` | `1` | `0` desliga a página `/demo` |
 | `BIBLIO_HOST` / `BIBLIO_PORTA` | `127.0.0.1` / `8080` | onde o servidor escuta (`0.0.0.0` para a rede) |
 
 Em produção, coloque o servidor atrás de HTTPS (por exemplo Nginx) e defina `BIBLIO_TOKEN`.

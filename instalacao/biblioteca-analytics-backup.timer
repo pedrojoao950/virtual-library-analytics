@@ -1,0 +1,10 @@
+[Unit]
+Description=Cópia de segurança diária das métricas da biblioteca
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

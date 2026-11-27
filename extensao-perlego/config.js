@@ -3,6 +3,7 @@
 const CONFIG_OMISSAO = {
   servidor: "http://127.0.0.1:8080",
   posto: "",
+  chave: "",           // chave de recolha (BIBLIO_CHAVE_RECOLHA no servidor)
   // Endereços da Perlego. Se a Perlego mudar o site, ajuste aqui ou na página de opções.
   regexLivro: "/(?:book|reader)/(\\d+)",
   regexLeitor: "/reader/|[?&](?:reader|read)=|/read(?:/|$)",

@@ -1,0 +1,31 @@
+[Unit]
+Description=Servidor de métricas da Biblioteca Virtual
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=biblioteca
+Group=biblioteca
+EnvironmentFile=/etc/biblioteca-analytics/env
+WorkingDirectory=/opt/biblioteca-analytics/app
+ExecStart=/usr/bin/python3 /opt/biblioteca-analytics/app/servidor.py
+Restart=on-failure
+RestartSec=3
+
+# Endurecimento: o serviço só pode escrever na pasta de dados
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+ReadWritePaths=/var/lib/biblioteca-analytics
+
+[Install]
+WantedBy=multi-user.target

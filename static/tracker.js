@@ -35,6 +35,7 @@
   var endpoint = (script && script.getAttribute("data-endpoint")) ||
     (script && script.src ? new URL("/api/eventos", script.src).href : "/api/eventos");
 
+  var chave = (script && script.getAttribute("data-chave")) || null; // BIBLIO_CHAVE_RECOLHA, se definida
   var SESSAO_INATIVA_MS = 30 * 60 * 1000;
   var LEITURA_TICK_MS = 15 * 1000;       // amostragem do tempo de leitura
   var LEITURA_INATIVO_MS = 2 * 60 * 1000; // sem interação há 2 min = não está a ler
@@ -88,7 +89,7 @@
   function enviar(usarBeacon) {
     if (!fila.length) return;
     var lote = fila.splice(0, fila.length);
-    var corpo = JSON.stringify({ eventos: lote });
+    var corpo = JSON.stringify({ chave: chave || undefined, eventos: lote });
     if (usarBeacon && navigator.sendBeacon) {
       if (navigator.sendBeacon(endpoint, new Blob([corpo], { type: "text/plain" }))) return;
     }

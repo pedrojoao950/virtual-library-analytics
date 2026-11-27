@@ -1,0 +1,15 @@
+# biblioteca-analytics — gerado por instalacao/instalar.sh
+# O Caddy obtém e renova sozinho o certificado HTTPS (Let's Encrypt).
+__DOMINIO__ {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Frame-Options "DENY"
+		# o endereço do painel leva o token: nunca o enviar a outros sites
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	reverse_proxy 127.0.0.1:__PORTA__
+}

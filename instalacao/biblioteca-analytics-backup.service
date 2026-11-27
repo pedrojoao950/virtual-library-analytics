@@ -1,0 +1,6 @@
+[Unit]
+Description=Cópia de segurança da base de dados de métricas da biblioteca
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/biblioteca-analytics-backup

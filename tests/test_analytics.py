@@ -279,5 +279,61 @@ class TestServidor(unittest.TestCase):
                 self.assertEqual(r.status, 200)
 
 
+class TestServidorProducao(unittest.TestCase):
+    """Configuração de produção: chave de recolha, token do painel e /demo desligada."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ["BIBLIO_SILENCIOSO"] = "1"
+        import servidor
+        cls.servidor = servidor
+        cls.antes = (servidor.Config.bd, servidor.Config.token, servidor.Config.chave_recolha, servidor.Config.demo)
+        cls.tmp = tempfile.TemporaryDirectory()
+        servidor.Config.bd = os.path.join(cls.tmp.name, "p.db")
+        servidor.Config.token, servidor.Config.chave_recolha, servidor.Config.demo = "tok", "chave-secreta", False
+        cls.srv = ThreadingHTTPServer(("127.0.0.1", 0), servidor.Handler)
+        cls.url = f"http://127.0.0.1:{cls.srv.server_address[1]}"
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+        c = cls.servidor.Config
+        c.bd, c.token, c.chave_recolha, c.demo = cls.antes
+        cls.tmp.cleanup()
+
+    def _post(self, corpo, sufixo=""):
+        req = urllib.request.Request(self.url + "/api/eventos" + sufixo, data=json.dumps(corpo).encode())
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+
+    def _get(self, caminho):
+        try:
+            with urllib.request.urlopen(self.url + caminho) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def test_chave(self):
+        ev = [{"tipo": "vista_pagina", "sessao": "s"}]
+        self.assertEqual(self._post({"eventos": ev})[0], 401)
+        self.assertEqual(self._post({"eventos": ev, "chave": "errada"})[0], 401)
+        self.assertEqual(self._post({"eventos": ev, "chave": "chave-secreta"}), (200, {"aceites": 1, "rejeitados": 0}))
+        self.assertEqual(self._post({"eventos": ev}, "?chave=chave-secreta")[0], 200)
+
+    def test_painel_e_demo(self):
+        self.assertEqual(self._get("/"), 401)
+        self.assertEqual(self._get("/?token=tok"), 200)
+        self.assertEqual(self._get("/api/metricas?periodo=hoje"), 401)
+        self.assertEqual(self._get("/api/metricas?periodo=hoje&token=tok"), 200)
+        self.assertEqual(self._get("/demo"), 404)
+        self.assertEqual(self._get("/tracker.js"), 200)
+        self.assertEqual(self._get("/api/saude"), 200)
+
+
 if __name__ == "__main__":
     unittest.main()

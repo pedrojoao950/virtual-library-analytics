@@ -12,6 +12,9 @@ Variáveis de ambiente opcionais:
     BIBLIO_POSTOS   ficheiro JSON {"IP": "nome do computador"} para identificar os computadores
                     da biblioteca pelo endereço IP (por omissão postos.json, se existir)
     BIBLIO_CONFIAR_PROXY=1  usar o cabeçalho X-Forwarded-For (só atrás de um proxy de confiança)
+    BIBLIO_CHAVE_RECOLHA    se definida, só aceita eventos que tragam esta chave
+                            (campo "chave" no JSON ou ?chave= no endereço) — use-a com servidor na internet
+    BIBLIO_DEMO=0           desliga a página /demo (recomendado em produção)
 """
 
 from __future__ import annotations
@@ -47,6 +50,8 @@ class Config:
     fuso = float(os.environ.get("BIBLIO_FUSO", "1"))
     ficheiro_postos = os.environ.get("BIBLIO_POSTOS", str(Path(__file__).resolve().parent / "postos.json"))
     confiar_proxy = os.environ.get("BIBLIO_CONFIAR_PROXY") == "1"
+    chave_recolha = os.environ.get("BIBLIO_CHAVE_RECOLHA") or None
+    demo = os.environ.get("BIBLIO_DEMO", "1") != "0"
     _postos_cache: tuple[float, dict] = (-1.0, {})
 
     @classmethod
@@ -130,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         qs = parse_qs(url.query)
 
-        if url.path in FICHEIROS:
+        if url.path in FICHEIROS and (url.path != "/demo" or Config.demo):
             nome, tipo, protegido = FICHEIROS[url.path]
             if protegido and not self._autorizado(qs):
                 return self._responder(HTTPStatus.UNAUTHORIZED, "Token em falta ou inválido.",
@@ -214,6 +219,11 @@ class Handler(BaseHTTPRequestHandler):
             corpo = json.loads(self.rfile.read(tamanho).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return self._json(HTTPStatus.BAD_REQUEST, {"erro": "JSON inválido"})
+        if Config.chave_recolha:
+            dada = (corpo.get("chave") if isinstance(corpo, dict) else None) \
+                or (parse_qs(urlparse(self.path).query).get("chave") or [""])[0]
+            if not hmac.compare_digest(str(dada or "").encode(), Config.chave_recolha.encode()):
+                return self._json(HTTPStatus.UNAUTHORIZED, {"erro": "chave de recolha em falta ou inválida"})
         eventos = corpo.get("eventos") if isinstance(corpo, dict) else corpo
         if isinstance(eventos, dict):
             eventos = [eventos]
@@ -238,9 +248,11 @@ def main():
     analytics.ligar(Config.bd).close()  # cria o esquema logo no arranque
     srv = ThreadingHTTPServer((args.host, args.porta), Handler)
     print(f"Painel:      http://{args.host}:{args.porta}/")
-    print(f"Demo:        http://{args.host}:{args.porta}/demo")
+    if Config.demo:
+        print(f"Demo:        http://{args.host}:{args.porta}/demo")
     print(f"Recolha:     POST http://{args.host}:{args.porta}/api/eventos")
     print(f"Base dados:  {Path(Config.bd).resolve()}")
+    print("Chave de recolha: " + ("ativa" if Config.chave_recolha else "desligada (qualquer um pode enviar eventos)"))
     n = len(Config.postos_por_ip())
     print(f"Computadores por IP: {n} em {Config.ficheiro_postos}" if n else
           "Computadores por IP: nenhum (opcional, ver postos.exemplo.json)")
