@@ -29,7 +29,7 @@ command -v apt-get >/dev/null || erro "este instalador é para Ubuntu ou Debian"
 info "A instalar pacotes (python3, sqlite3, caddy)…"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q python3 sqlite3 curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https
+apt-get install -y -q python3 python3-reportlab fonts-dejavu-core sqlite3 curl ca-certificates gnupg debian-keyring debian-archive-keyring apt-transport-https
 if ! apt-cache policy caddy 2>/dev/null | grep -q 'Candidate: [0-9]'; then
   # repositório oficial do Caddy (https://caddyserver.com/docs/install)
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
@@ -66,7 +66,7 @@ install -d -o root -g root -m 755 "$APP_DIR"
 info "A copiar o programa para $APP_DIR…"
 rm -rf "$APP_DIR/app.novo"
 mkdir -p "$APP_DIR/app.novo"
-cp -a "$ORIGEM"/{servidor.py,analytics.py,relatorio.py,importar_counter.py,static} "$APP_DIR/app.novo/"
+cp -a "$ORIGEM"/{servidor.py,analytics.py,relatorio.py,relatorio_mensal.py,importar_counter.py,static} "$APP_DIR/app.novo/"
 chown -R root:root "$APP_DIR/app.novo"
 rm -rf "$APP_DIR/app.antigo"
 [[ -d "$APP_DIR/app" ]] && mv "$APP_DIR/app" "$APP_DIR/app.antigo"

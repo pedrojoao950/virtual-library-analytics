@@ -8,16 +8,21 @@ set -euo pipefail
 ORIGEM="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR=/opt/biblioteca-analytics
 
+# pacotes novos de versões recentes (gerador de PDF do relatório mensal)
+dpkg -s python3-reportlab fonts-dejavu-core >/dev/null 2>&1 || \
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-reportlab fonts-dejavu-core >/dev/null
 /usr/local/sbin/biblioteca-analytics-backup   # cópia de segurança antes de atualizar
 rm -rf "$APP_DIR/app.novo"
 mkdir -p "$APP_DIR/app.novo"
-cp -a "$ORIGEM"/{servidor.py,analytics.py,relatorio.py,importar_counter.py,static} "$APP_DIR/app.novo/"
+cp -a "$ORIGEM"/{servidor.py,analytics.py,relatorio.py,relatorio_mensal.py,importar_counter.py,static} "$APP_DIR/app.novo/"
 chown -R root:root "$APP_DIR/app.novo"
 rm -rf "$APP_DIR/app.antigo"
 mv "$APP_DIR/app" "$APP_DIR/app.antigo"
 mv "$APP_DIR/app.novo" "$APP_DIR/app"
 install -m 644 "$ORIGEM/instalacao/biblioteca-analytics.service" /etc/systemd/system/biblioteca-analytics.service
 install -m 755 "$ORIGEM/instalacao/backup.sh" /usr/local/sbin/biblioteca-analytics-backup
+install -m 644 "$ORIGEM/instalacao/biblioteca-relatorio-mensal.service" /etc/systemd/system/
+install -m 644 "$ORIGEM/instalacao/biblioteca-relatorio-mensal.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl restart biblioteca-analytics
 

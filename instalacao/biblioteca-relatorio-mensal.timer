@@ -1,0 +1,10 @@
+[Unit]
+Description=Relatório mensal da biblioteca — dia 1 de cada mês
+
+[Timer]
+# 07:23 UTC = 08:23 em Angola. Se o servidor estiver desligado nessa hora, corre quando ligar.
+OnCalendar=*-*-01 07:23:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -107,6 +107,47 @@ Desligue o diagnóstico no fim.
 Quando tiver acesso de administrador à Perlego, descarregue o relatório COUNTER **TR_B1** e
 importe-o no painel, no cartão *Perlego — relatórios oficiais*, botão **Importar relatório…**.
 
+## 7. Relatório mensal em PDF por e-mail
+
+No dia 1 de cada mês, o servidor envia por e-mail um PDF com o mês anterior: indicadores
+comparados com o mês anterior, um resumo em frases, leitura e pesquisas por dia, livros mais
+lidos, termos mais pesquisados, não encontrados, uso por computador e (se importado) o relatório
+COUNTER da Perlego.
+
+A DigitalOcean **bloqueia o envio de e-mail por SMTP** em contas novas, por isso use o **Brevo**
+(gratuito até 300 e-mails/dia, envia por HTTPS):
+
+1. Crie uma conta em https://www.brevo.com (plano *Free*).
+2. **Remetente:** menu **Senders, Domains & Dedicated IPs → Senders → Add a sender**. Use um
+   e-mail seu (ex.: o da biblioteca) e confirme-o pelo link que o Brevo envia.
+3. **Chave de API:** menu (canto superior direito) **SMTP & API → API Keys → Generate a new API key**.
+   Copie a chave (`xkeysib-…`); só é mostrada uma vez.
+4. **IPs autorizados:** em **Security → Authorised IPs**, adicione o IP do servidor da DigitalOcean
+   (ou desative o bloqueio). Sem isto, o Brevo recusa o envio com "unrecognised IP address".
+
+No servidor:
+
+```bash
+cd virtual-library-analytics && git pull
+sudo bash instalacao/configurar-email.sh
+```
+
+O script pergunta os destinatários, o nome da instituição, o remetente (o mesmo do passo 2) e a
+chave do Brevo, agenda o envio mensal e oferece-se para enviar logo um e-mail de teste com o mês
+atual. Pode correr outra vez para mudar destinatários ou chaves.
+
+| Tarefa | Comando |
+|---|---|
+| Enviar o relatório do mês anterior agora | `sudo systemctl start biblioteca-relatorio-mensal` |
+| Ver se correu bem | `journalctl -u biblioteca-relatorio-mensal -n 20` |
+| Ver a data do próximo envio | `systemctl list-timers biblioteca-relatorio-mensal.timer` |
+| Gerar só o PDF de um mês | `cd /opt/biblioteca-analytics/app && sudo -u biblioteca python3 relatorio_mensal.py --bd /var/lib/biblioteca-analytics/biblioteca_analytics.db --mes 2026-10 --so-pdf /tmp/rel.pdf` |
+
+Se preferir outro servidor de e-mail (por exemplo o da instituição, fora da DigitalOcean),
+escolha a opção 2 (SMTP) no script. O e-mail **não** leva o link do painel, porque esse link dá
+acesso aos dados; para o incluir, acrescente `BIBLIO_EMAIL_LINK_PAINEL=1` e
+`BIBLIO_URL_PUBLICO=https://…` a `/etc/biblioteca-analytics/env`.
+
 ---
 
 ## Manutenção
@@ -149,6 +190,7 @@ estiver errada, a extensão guarda os dados e envia-os quando for corrigida.
 | Opções da extensão: "não foi possível contactar o servidor" | O endereço começa por `https://` e não tem `/` no fim? A rede da biblioteca bloqueia o site? (teste abrir `https://…/api/saude` no navegador desse computador) |
 | "chave de recolha errada" | Copie outra vez a chave, sem espaços |
 | O painel diz "Token em falta ou inválido" | Use o endereço completo com `?token=…` |
+| E-mail mensal não chega | `journalctl -u biblioteca-relatorio-mensal -n 20`; veja a pasta de spam; no Brevo confirme o remetente e os IPs autorizados |
 | Painel sem dados de um computador | Opções da extensão desse computador: "Eventos à espera de envio" e "Último erro" |
 
 ## Segurança e privacidade

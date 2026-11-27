@@ -7,7 +7,7 @@ import unittest
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -333,6 +333,77 @@ class TestServidorProducao(unittest.TestCase):
         self.assertEqual(self._get("/demo"), 404)
         self.assertEqual(self._get("/tracker.js"), 200)
         self.assertEqual(self._get("/api/saude"), 200)
+
+
+class TestRelatorioMensal(unittest.TestCase):
+    def setUp(self):
+        try:
+            import reportlab  # noqa: F401
+        except ImportError:
+            self.skipTest("reportlab não instalado")
+        import relatorio_mensal
+        self.rm = relatorio_mensal
+        self.conn = analytics.ligar(":memory:")
+        agora = ms(date(2026, 10, 15), 10)
+        analytics.inserir_eventos(self.conn, [
+            {"tipo": "pesquisa", "ts": agora, "sessao": "a", "termo": "Harry Potter", "num_resultados": 0, "posto": "PC-01"},
+            {"tipo": "leitura", "ts": agora, "sessao": "a", "livro_id": "1", "livro_titulo": "Mayombe",
+             "duracao_ms": 120000, "posto": "PC-01"},
+        ], agora_ms=agora)
+
+    def tearDown(self):
+        self.conn.close()
+
+    def test_intervalos(self):
+        ini, fim, t = self.rm.intervalo_mes("2026-02", 1)
+        self.assertEqual((ini, fim, t), (date(2026, 2, 1), date(2026, 2, 28), "fevereiro de 2026"))
+
+    def test_pdf_e_envio_brevo(self):
+        dados, anterior = self.rm.recolher(self.conn, date(2026, 10, 1), date(2026, 10, 31), 1)
+        self.assertEqual(dados["resumo"]["pesquisas"], 1)
+        pdf = self.rm.gerar_pdf(dados, anterior, "outubro de 2026", "Instituição X")
+        self.assertTrue(pdf.startswith(b"%PDF"))
+        obs = self.rm.observacoes(dados["resumo"], anterior["resumo"], dados)
+        self.assertTrue(any("Harry Potter" in o for o in obs))
+
+        recebido = {}
+
+        class Brevo(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                recebido["chave"] = self.headers.get("api-key")
+                recebido["corpo"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                self.send_response(201)
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), Brevo)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.rm.BREVO_URL = f"http://127.0.0.1:{srv.server_address[1]}/v3/smtp/email"
+        env = {"BIBLIO_EMAIL_PARA": "a@x.ao, b@x.ao", "BIBLIO_EMAIL_DE": "biblioteca@x.ao", "BIBLIO_BREVO_CHAVE": "k1"}
+        antigo = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        try:
+            txt = self.rm.enviar("Assunto", "<p>oi</p>", pdf, "r.pdf")
+        finally:
+            for k, v in antigo.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            srv.shutdown()
+            srv.server_close()
+        self.assertIn("Brevo", txt)
+        self.assertEqual(recebido["chave"], "k1")
+        self.assertEqual([t["email"] for t in recebido["corpo"]["to"]], ["a@x.ao", "b@x.ao"])
+        import base64
+        self.assertTrue(base64.b64decode(recebido["corpo"]["attachment"][0]["content"]).startswith(b"%PDF"))
+
+    def test_sem_configuracao(self):
+        with self.assertRaises(RuntimeError):
+            self.rm.enviar("A", "b", b"%PDF", "r.pdf")
 
 
 if __name__ == "__main__":

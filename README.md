@@ -18,6 +18,7 @@ biblioteca-analytics/
 ├── servidor.py          # recebe eventos, serve o painel e a API de métricas
 ├── analytics.py         # base de dados e cálculo das métricas
 ├── relatorio.py         # relatório na consola / exportação CSV, sem servidor
+├── relatorio_mensal.py  # relatório mensal em PDF enviado por e-mail (Brevo ou SMTP)
 ├── importar_counter.py  # importa relatórios COUNTER (Perlego) em XLSX/CSV/TSV
 ├── extensao-perlego/    # extensão Chrome/Edge para os computadores da biblioteca
 ├── instalacao/          # instalador para servidor Ubuntu/Debian (HTTPS, serviço, cópias)
@@ -200,6 +201,13 @@ agrupadas por **dia, semana (começa à segunda) ou mês**.
 **Leitura para usabilidade:** taxa de sucesso a descer ou tempo de pesquisa a subir indicam
 dificuldade em encontrar livros; muitas pesquisas sem resultados indicam falhas no acervo ou
 na pesquisa (erros ortográficos, sinónimos); posição média do clique alta indica má ordenação.
+
+## Relatório mensal em PDF por e-mail
+
+No servidor, `sudo bash instalacao/configurar-email.sh` agenda o envio no dia 1 de cada mês
+(ver o [guia](instalacao/GUIA-INSTALACAO.md#7-relatório-mensal-em-pdf-por-e-mail)).
+Para gerar um PDF à mão: `python relatorio_mensal.py --mes 2026-10 --so-pdf outubro.pdf`
+(precisa do pacote `reportlab`).
 
 ## Relatórios sem o painel
 

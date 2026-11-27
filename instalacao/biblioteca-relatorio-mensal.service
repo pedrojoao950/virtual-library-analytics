@@ -1,0 +1,17 @@
+[Unit]
+Description=Relatório mensal da biblioteca (PDF por e-mail)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=biblioteca
+Group=biblioteca
+EnvironmentFile=/etc/biblioteca-analytics/env
+WorkingDirectory=/opt/biblioteca-analytics/app
+ExecStart=/usr/bin/python3 /opt/biblioteca-analytics/app/relatorio_mensal.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/biblioteca-analytics
