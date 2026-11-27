@@ -354,6 +354,96 @@ def corpo_html(dados: dict, anterior: dict, titulo_mes: str, url_painel: str | N
             f"<p style='color:#666;font-size:12px'>Enviado automaticamente pelo servidor de métricas da biblioteca.</p></div>")
 
 
+def explicar_brevo(erro: urllib.error.HTTPError) -> str:
+    """Resposta de erro do Brevo numa linha, com uma dica em português quando a reconhecemos."""
+    bruto = erro.read().decode(errors="replace").strip()
+    try:
+        info = json.loads(bruto)
+        texto = f"{info.get('code', '')}: {info.get('message', '')}".strip(": ")
+    except ValueError:
+        texto = " ".join(bruto.split())[:500] or "(sem mensagem)"
+    baixo = texto.lower()
+    dicas = [
+        ("unrecognised ip", "adicione o IP do servidor em Brevo → Security → Authorised IPs"),
+        ("sender", "o remetente (BIBLIO_EMAIL_DE) tem de estar confirmado em Brevo → Senders"),
+        ("not yet activated", "a conta Brevo ainda não está ativada para envios; contacte o suporte do Brevo"),
+        ("not activated", "a conta Brevo ainda não está ativada para envios; contacte o suporte do Brevo"),
+        ("key not found", "a chave de API está errada; gere outra em Brevo → SMTP & API → API Keys"),
+        ("unauthorized", "a chave de API está errada; gere outra em Brevo → SMTP & API → API Keys"),
+        ("email is not valid", "há um e-mail mal escrito nos destinatários ou no remetente"),
+        ("invalid email", "há um e-mail mal escrito nos destinatários ou no remetente"),
+    ]
+    for chave, dica in dicas:
+        if chave in baixo:
+            return f"{texto} → {dica}"
+    return texto
+
+
+def verificar_email() -> int:
+    """Confere a configuração do e-mail sem enviar nada. Devolve 0 se estiver tudo bem."""
+    import re
+    problemas = 0
+
+    def ok(msg):
+        print(f"  ✓ {msg}")
+
+    def mal(msg):
+        nonlocal problemas
+        problemas += 1
+        print(f"  ✗ {msg}")
+
+    print("Configuração:")
+    para = [e.strip() for e in os.environ.get("BIBLIO_EMAIL_PARA", "").split(",") if e.strip()]
+    de = os.environ.get("BIBLIO_EMAIL_DE", "").strip()
+    valido = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$")
+    if not para:
+        mal("BIBLIO_EMAIL_PARA está vazio")
+    for e in para:
+        (ok if valido.match(e) else mal)(f"destinatário {e!r}" + ("" if valido.match(e) else " não parece um e-mail válido"))
+    (ok if valido.match(de) else mal)(f"remetente {de!r}" + ("" if valido.match(de) else " não parece um e-mail válido"))
+
+    chave = os.environ.get("BIBLIO_BREVO_CHAVE", "")
+    if not chave:
+        print("  (envio por SMTP — a verificação do Brevo não se aplica)" if os.environ.get("BIBLIO_SMTP_HOST")
+              else "  ✗ falta BIBLIO_BREVO_CHAVE ou BIBLIO_SMTP_HOST")
+        return problemas + (0 if os.environ.get("BIBLIO_SMTP_HOST") else 1)
+
+    base = BREVO_URL.rsplit("/smtp/email", 1)[0]
+
+    def pedir(caminho):
+        req = urllib.request.Request(base + caminho, headers={"api-key": chave, "accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read() or b"{}")
+
+    print("Brevo:")
+    try:
+        conta = pedir("/account")
+        ok(f"chave de API aceite (conta {conta.get('email', '?')})")
+        relay = conta.get("relay") or {}
+        if relay and relay.get("enabled") is False:
+            mal("a conta não tem o envio transacional ativo — contacte o suporte do Brevo para a ativar")
+    except urllib.error.HTTPError as erro:
+        mal(f"o Brevo recusou a chave (HTTP {erro.code}): {explicar_brevo(erro)}")
+        return problemas
+    except OSError as erro:
+        mal(f"não foi possível contactar o Brevo: {erro}")
+        return problemas
+    try:
+        remetentes = pedir("/senders").get("senders", [])
+        encontrado = next((x for x in remetentes if x.get("email", "").lower() == de.lower()), None)
+        if not encontrado:
+            lista = ", ".join(x.get("email", "?") for x in remetentes) or "nenhum"
+            mal(f"o remetente {de} não existe no Brevo (remetentes da conta: {lista})")
+        elif not encontrado.get("active", True):
+            mal(f"o remetente {de} existe mas ainda não foi confirmado — abra o e-mail de confirmação do Brevo")
+        else:
+            ok(f"remetente {de} confirmado")
+    except urllib.error.HTTPError as erro:
+        mal(f"não foi possível ler os remetentes (HTTP {erro.code}): {explicar_brevo(erro)}")
+    print("Tudo certo." if not problemas else f"{problemas} problema(s) a corrigir.")
+    return problemas
+
+
 def enviar(assunto: str, html_corpo: str, pdf: bytes, nome_pdf: str) -> str:
     para = [e.strip() for e in os.environ.get("BIBLIO_EMAIL_PARA", "").split(",") if e.strip()]
     de = os.environ.get("BIBLIO_EMAIL_DE", "").strip()
@@ -375,7 +465,7 @@ def enviar(assunto: str, html_corpo: str, pdf: bytes, nome_pdf: str) -> str:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return f"enviado pelo Brevo para {', '.join(para)} (HTTP {resp.status})"
         except urllib.error.HTTPError as erro:
-            raise RuntimeError(f"o Brevo recusou o envio (HTTP {erro.code}): {erro.read().decode(errors='replace')[:300]}")
+            raise RuntimeError(f"o Brevo recusou o envio (HTTP {erro.code}): {explicar_brevo(erro)}")
 
     if os.environ.get("BIBLIO_SMTP_HOST"):
         msg = EmailMessage()
@@ -404,7 +494,10 @@ def main():
     ap.add_argument("--mes", default="anterior", help="'anterior' (por omissão), 'atual' ou AAAA-MM")
     ap.add_argument("--so-pdf", metavar="FICHEIRO", help="só gera o PDF neste ficheiro, sem enviar")
     ap.add_argument("--bd", default=None)
+    ap.add_argument("--verificar-email", action="store_true", help="confere a configuração do e-mail sem enviar")
     a = ap.parse_args()
+    if a.verificar_email:
+        sys.exit(1 if verificar_email() else 0)
 
     fuso = float(os.environ.get("BIBLIO_FUSO", "1"))
     ini, fim, titulo_mes = intervalo_mes(a.mes, fuso)

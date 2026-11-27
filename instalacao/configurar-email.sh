@@ -83,13 +83,19 @@ install -m 644 "$ORIGEM/instalacao/biblioteca-relatorio-mensal.timer" /etc/syste
 systemctl daemon-reload
 systemctl enable --now biblioteca-relatorio-mensal.timer >/dev/null
 
+info "A verificar a configuração do e-mail…"
+CORRER=(systemd-run --quiet --wait --pipe --collect -p User=biblioteca -p EnvironmentFile="$ENV_FILE"
+        -p WorkingDirectory=/opt/biblioteca-analytics/app /usr/bin/python3 /opt/biblioteca-analytics/app/relatorio_mensal.py)
+if ! "${CORRER[@]}" --verificar-email; then
+  echo
+  echo "Corrija o que está marcado com ✗ (no Brevo ou correndo este script outra vez) antes de enviar."
+fi
+
 echo
 read -r -p "Enviar agora um e-mail de teste com o relatório do mês atual (até hoje)? [S/n] " TESTE
 if [[ ! $TESTE =~ ^[nN] ]]; then
   info "A enviar o e-mail de teste…"
-  if systemd-run --quiet --wait --pipe --collect -p User=biblioteca -p EnvironmentFile="$ENV_FILE" \
-       -p WorkingDirectory=/opt/biblioteca-analytics/app \
-       /usr/bin/python3 /opt/biblioteca-analytics/app/relatorio_mensal.py --mes atual; then
+  if "${CORRER[@]}" --mes atual; then
     echo "Verifique a caixa de correio (e a pasta de spam/lixo)."
   else
     echo "O envio falhou. Veja a mensagem acima e o guia (secção Relatório mensal)."
@@ -100,3 +106,4 @@ info "Configurado."
 echo "Próximo envio automático: $(systemctl show biblioteca-relatorio-mensal.timer -p NextElapseUSecRealtime --value 2>/dev/null || echo 'dia 1 do próximo mês')"
 echo "Enviar manualmente:  sudo systemctl start biblioteca-relatorio-mensal"
 echo "Ver o resultado:     journalctl -u biblioteca-relatorio-mensal -n 20"
+echo "Verificar o e-mail:  sudo bash instalacao/verificar-email.sh"

@@ -401,6 +401,12 @@ class TestRelatorioMensal(unittest.TestCase):
         import base64
         self.assertTrue(base64.b64decode(recebido["corpo"]["attachment"][0]["content"]).startswith(b"%PDF"))
 
+    def test_erro_brevo_explicado(self):
+        import io
+        erro = urllib.error.HTTPError("u", 400, "Bad", {}, io.BytesIO(
+            b'{"code":"invalid_parameter","message":"Sender is not valid"}'))
+        self.assertIn("confirmado em Brevo", self.rm.explicar_brevo(erro))
+
     def test_sem_configuracao(self):
         with self.assertRaises(RuntimeError):
             self.rm.enviar("A", "b", b"%PDF", "r.pdf")
